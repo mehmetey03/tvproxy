@@ -23,12 +23,10 @@ jobs:
       - name: Run the update script
         run: python app.py  # Python scriptinizi çalıştırır
       
-      - name: Commit and push changes
-        run: |
-          git config --local user.email "action@github.com"
-          git config --local user.name "GitHub Action"
-          git add t.m3u
-          git commit -m "Updated M3U playlist with new baseurl"
-          git push
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      - name: Add and commit
+        uses: EndBug/add-and-commit@v9
+        with:
+          author_name: GitHub Actions
+          author_email: 41898282+github-actions[bot]@users.noreply.github.com
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          message: "chore: Update file"
