@@ -81,7 +81,7 @@ print("Yeni baseurl:", baseurl)
 
 # m3u dosyasını güncelleme
 m3u_file_path = "t.m3u"
-old_baseurl_pattern = r"https://[^/]+"
+old_baseurl_pattern = r"https://[^/yayin]+"
 
 with open(m3u_file_path, 'r') as file:
     m3u_content = file.read()
