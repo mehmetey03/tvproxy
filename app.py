@@ -67,6 +67,7 @@ if ilk_a:
                     match = re.search(r'var baseurl\s*=\s*"([^"]+)"', script_content)
                     if match:
                         baseurl = match.group(1)
+                        baseurl = baseurl.rstrip('/')
                         break
             else:
                 print("baseurl değeri bulunamadı.")
