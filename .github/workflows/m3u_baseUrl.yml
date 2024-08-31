@@ -26,7 +26,7 @@ jobs:
         pip install -r ${GITHUB_WORKSPACE}/requirements.txt  # if you have a requirements.txt file
 
     - name: deneme
-      run: python finalcsv_creator.py  # change to be the path to your script
+      run: python app.py  # change to be the path to your script
 
     - name: Add and commit
       uses: EndBug/add-and-commit@v9
