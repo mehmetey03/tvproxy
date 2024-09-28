@@ -7,6 +7,10 @@ https://t.trgoalshls41.shop/yayinzirve.m3u8
 #EXTVLCOPT:http-referrer=https://google.com
 #EXTVLCOPT:http-user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36
 https://t.trgoalshls41.shop/yayin1.m3u8
+#EXTINF:0 tvg-name='beIN Sports 1' tvg-logo='https://raw.githubusercontent.com/scatterradarcsv/tv_app/main/kanal_logolari/bein1.png',beIN Sports 1
+#EXTVLCOPT:http-referrer=https://google.com
+#EXTVLCOPT:http-user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36
+https://t.trgoalshls41.shop/yayinstar.m3u8
 #EXTINF:0 tvg-name='beIN Sports 2' tvg-logo='https://raw.githubusercontent.com/scatterradarcsv/tv_app/main/kanal_logolari/bein222.png',beIN Sports 2
 #EXTVLCOPT:http-referrer=https://google.com
 #EXTVLCOPT:http-user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36
