@@ -3,7 +3,7 @@ name: m3u_baseUrl
 on:
   
   schedule:
-    - cron: "*/30 * * * *"
+    - cron: "*/10 * * * *"
   # run when manually triggered
   workflow_dispatch:
   # run when this file is changed
