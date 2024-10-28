@@ -34,21 +34,23 @@ ilk_a = soup.find('a')
 # href değerini alma ve o adrese gitme
 if ilk_a:
     href = ilk_a.get('href')
-    
+
     # Yeni istek gönderme
     response_href = requests.get(href, headers=headers)
-    
+
     # Meta refresh tag'ini parse etme
     soup_href = BeautifulSoup(response_href.text, 'html.parser')
-    meta_tag = soup_href.find('meta', attrs={'http-equiv': 'refresh'})
-    
-    if meta_tag:
-        # content özelliğini alma
-        content = meta_tag.get('content')
-        
-        # URL'yi alma
+    title = soup_href.find('title').text
+    if title:
+        response_title = requests.get(title, headers=headers)
+        content=response_title.text
+
         if content:
-            url = content.split('URL=')[-1]
+            soup_title = BeautifulSoup(content, 'html.parser')
+            meta_tag_title = soup_title.find('meta', attrs={'http-equiv': 'refresh'})
+            meta_tag_content = meta_tag_title.get('content')
+            
+            url = meta_tag_content.split('URL=')[-1]
             yayin1_url = f"{url}channel.html?id=yayin1"
             
             # Yeni URL'ye istek gönderme
