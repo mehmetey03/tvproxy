@@ -1,0 +1,11 @@
+flask
+requests
+gunicorn[gevent]
+python-dotenv
+cachetools
+PySocks
+psutil
+flask-socketio
+mpegdash
+lxml
+defusedxml
