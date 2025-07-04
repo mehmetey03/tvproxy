@@ -1,0 +1,783 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Proxy Dashboard - Amministrazione</title>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/socket.io/4.0.1/socket.io.js"></script>
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css" rel="stylesheet">
+    <style>
+        * { 
+            margin: 0; 
+            padding: 0; 
+            box-sizing: border-box; 
+            -webkit-tap-highlight-color: transparent;
+        }
+        
+        body {
+            font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: #333;
+            overflow-x: hidden;
+            min-height: 100vh;
+        }
+        
+        /* Animated background elements */
+        body::before,
+        body::after {
+            content: '';
+            position: fixed;
+            width: 400px;
+            height: 400px;
+            border-radius: 50%;
+            background: rgba(255, 255, 255, 0.05);
+            animation: float 8s ease-in-out infinite;
+            z-index: -1;
+        }
+
+        body::before {
+            top: -200px;
+            right: -200px;
+            animation-delay: 0s;
+        }
+
+        body::after {
+            bottom: -200px;
+            left: -200px;
+            animation-delay: 4s;
+        }
+
+        @keyframes float {
+            0%, 100% { transform: translateY(0px) rotate(0deg) scale(1); }
+            50% { transform: translateY(-30px) rotate(180deg) scale(1.1); }
+        }
+        
+        /* Navbar Modern */
+        .navbar {
+            background: rgba(255, 255, 255, 0.95);
+            backdrop-filter: blur(20px);
+            border-bottom: 1px solid rgba(255, 255, 255, 0.2);
+            padding: 1rem 2rem;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            box-shadow: 0 4px 30px rgba(0, 0, 0, 0.1);
+            position: sticky;
+            top: 0;
+            z-index: 1000;
+        }
+        
+        .navbar h1 {
+            font-size: 1.5rem;
+            font-weight: 700;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            background-clip: text;
+            display: flex;
+            align-items: center;
+            gap: 0.75rem;
+        }
+        
+        .nav-links {
+            display: flex;
+            gap: 1rem;
+            flex-wrap: wrap;
+        }
+        
+        .nav-links a {
+            color: #667eea;
+            text-decoration: none;
+            padding: 0.5rem 1rem;
+            border-radius: 12px;
+            transition: all 0.3s ease;
+            font-weight: 500;
+            font-size: 0.9rem;
+            white-space: nowrap;
+            min-height: 44px;
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+        }
+        
+        .nav-links a:hover, .nav-links a:active {
+            background: rgba(102, 126, 234, 0.1);
+            transform: translateY(-2px);
+        }
+        
+        /* Container responsivo */
+        .container {
+            max-width: 1400px;
+            margin: 0 auto;
+            padding: 2rem;
+            position: relative;
+            z-index: 10;
+        }
+        
+        /* Status banner moderno */
+        .status-banner {
+            background: rgba(255, 255, 255, 0.95);
+            backdrop-filter: blur(20px);
+            border: 1px solid rgba(255, 255, 255, 0.2);
+            color: #2d3748;
+            padding: 2rem;
+            border-radius: 20px;
+            margin-bottom: 2rem;
+            text-align: center;
+            box-shadow: 0 20px 40px rgba(0, 0, 0, 0.1);
+            position: relative;
+            animation: slideInUp 0.8s ease-out;
+        }
+
+        @keyframes slideInUp {
+            from {
+                opacity: 0;
+                transform: translateY(30px);
+            }
+            to {
+                opacity: 1;
+                transform: translateY(0);
+            }
+        }
+        
+        .status-banner h2 {
+            font-size: 1.75rem;
+            font-weight: 600;
+            margin-bottom: 1rem;
+            color: #2d3748;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 0.75rem;
+        }
+        
+        .status-banner p {
+            font-size: 1.1rem;
+            margin: 0.5rem 0;
+            color: #4a5568;
+        }
+        
+        .connection-indicator {
+            position: absolute;
+            top: 1rem;
+            right: 1.5rem;
+            width: 12px;
+            height: 12px;
+            border-radius: 50%;
+            background: #4ade80;
+            animation: pulse 2s infinite;
+        }
+        
+        .connection-indicator.disconnected {
+            background: #e53e3e;
+            animation: shake 0.5s ease-in-out;
+        }
+        
+        @keyframes pulse {
+            0% { box-shadow: 0 0 0 0 rgba(74, 222, 128, 0.7); }
+            70% { box-shadow: 0 0 0 10px rgba(74, 222, 128, 0); }
+            100% { box-shadow: 0 0 0 0 rgba(74, 222, 128, 0); }
+        }
+        
+        @keyframes shake {
+            0%, 100% { transform: translateX(0); }
+            25% { transform: translateX(-5px); }
+            75% { transform: translateX(5px); }
+        }
+        
+        /* Grid responsivo per statistiche */
+        .stats-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+            gap: 2rem;
+            margin: 2rem 0;
+        }
+        
+        .stat-card {
+            background: rgba(255, 255, 255, 0.95);
+            backdrop-filter: blur(20px);
+            border: 1px solid rgba(255, 255, 255, 0.2);
+            padding: 2rem;
+            border-radius: 20px;
+            box-shadow: 0 20px 40px rgba(0, 0, 0, 0.1);
+            transition: all 0.3s ease;
+            position: relative;
+            overflow: hidden;
+            min-height: 140px;
+            animation: fadeInUp 0.8s ease-out;
+        }
+
+        .stat-card:nth-child(2) { animation-delay: 0.1s; }
+        .stat-card:nth-child(3) { animation-delay: 0.2s; }
+        .stat-card:nth-child(4) { animation-delay: 0.3s; }
+        
+        @keyframes fadeInUp {
+            from {
+                opacity: 0;
+                transform: translateY(20px);
+            }
+            to {
+                opacity: 1;
+                transform: translateY(0);
+            }
+        }
+        
+        .stat-card::before {
+            content: '';
+            position: absolute;
+            top: 0;
+            left: 0;
+            right: 0;
+            height: 4px;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+        }
+        
+        .stat-card:hover, .stat-card:active {
+            transform: translateY(-8px);
+            box-shadow: 0 30px 60px rgba(0, 0, 0, 0.15);
+        }
+        
+        .stat-header {
+            display: flex;
+            align-items: center;
+            margin-bottom: 1rem;
+        }
+        
+        .stat-icon {
+            font-size: 1.5rem;
+            margin-right: 0.75rem;
+            color: #667eea;
+        }
+        
+        .stat-title {
+            font-size: 1.1rem;
+            font-weight: 600;
+            color: #2d3748;
+        }
+        
+        .stat-value {
+            font-size: 2.5rem;
+            font-weight: 700;
+            color: #667eea;
+            margin: 1rem 0;
+            transition: all 0.3s ease;
+        }
+        
+        .stat-subtitle {
+            color: #718096;
+            font-size: 0.9rem;
+            font-weight: 500;
+        }
+        
+        /* Progress bar moderno */
+        .progress-bar {
+            width: 100%;
+            height: 12px;
+            background: rgba(102, 126, 234, 0.1);
+            border-radius: 6px;
+            overflow: hidden;
+            margin: 1rem 0;
+            cursor: pointer;
+        }
+        
+        .progress-fill {
+            height: 100%;
+            background: linear-gradient(90deg, #667eea, #764ba2);
+            transition: width 0.8s ease;
+            border-radius: 6px;
+            position: relative;
+        }
+
+        .progress-fill::after {
+            content: '';
+            position: absolute;
+            top: 0;
+            left: -100%;
+            width: 100%;
+            height: 100%;
+            background: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.3), transparent);
+            animation: shimmer 2s infinite;
+        }
+
+        @keyframes shimmer {
+            0% { left: -100%; }
+            100% { left: 100%; }
+        }
+        
+        /* Endpoints section moderno */
+        .endpoints-section {
+            background: rgba(255, 255, 255, 0.95);
+            backdrop-filter: blur(20px);
+            border: 1px solid rgba(255, 255, 255, 0.2);
+            padding: 2.5rem;
+            border-radius: 20px;
+            box-shadow: 0 20px 40px rgba(0, 0, 0, 0.1);
+            margin-top: 2rem;
+            animation: slideInUp 0.8s ease-out 0.4s both;
+        }
+
+        .endpoints-section h3 {
+            font-size: 1.5rem;
+            font-weight: 600;
+            color: #2d3748;
+            margin-bottom: 1.5rem;
+            display: flex;
+            align-items: center;
+            gap: 0.75rem;
+        }
+        
+        .endpoints-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+            gap: 1.5rem;
+            margin-top: 1.5rem;
+        }
+        
+        .endpoint-card {
+            padding: 1.5rem;
+            border: 2px solid rgba(102, 126, 234, 0.2);
+            border-radius: 16px;
+            transition: all 0.3s ease;
+            min-height: 44px;
+            cursor: pointer;
+            background: rgba(255, 255, 255, 0.5);
+            backdrop-filter: blur(10px);
+            position: relative;
+            overflow: hidden;
+        }
+
+        .endpoint-card::before {
+            content: '';
+            position: absolute;
+            top: 0;
+            left: -100%;
+            width: 100%;
+            height: 100%;
+            background: linear-gradient(90deg, transparent, rgba(102, 126, 234, 0.1), transparent);
+            transition: left 0.5s;
+        }
+
+        .endpoint-card:hover::before {
+            left: 100%;
+        }
+        
+        .endpoint-card:hover, .endpoint-card:active {
+            border-color: #667eea;
+            background: rgba(102, 126, 234, 0.05);
+            transform: translateY(-4px) scale(1.02);
+            box-shadow: 0 15px 30px rgba(102, 126, 234, 0.2);
+        }
+        
+        .endpoint-card h4 {
+            color: #667eea;
+            margin-bottom: 0.75rem;
+            font-size: 1.1rem;
+            font-weight: 600;
+        }
+        
+        .endpoint-card p {
+            font-size: 0.9rem;
+            line-height: 1.5;
+            color: #4a5568;
+        }
+        
+        /* Indicatore connessione moderno */
+        .connection-status {
+            position: fixed;
+            bottom: 2rem;
+            right: 2rem;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            padding: 1rem 1.5rem;
+            border-radius: 50px;
+            font-size: 0.9rem;
+            z-index: 1000;
+            box-shadow: 0 8px 25px rgba(102, 126, 234, 0.3);
+            transition: all 0.3s ease;
+            min-height: 44px;
+            display: flex;
+            align-items: center;
+            gap: 0.75rem;
+            backdrop-filter: blur(20px);
+        }
+        
+        .connection-status.disconnected {
+            background: linear-gradient(135deg, #e53e3e 0%, #c53030 100%);
+            animation: shake 0.5s ease-in-out;
+        }
+        
+        /* Toast moderno */
+        .toast {
+            position: fixed;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            background: rgba(0, 0, 0, 0.9);
+            color: white;
+            padding: 1rem 1.5rem;
+            border-radius: 12px;
+            font-size: 0.9rem;
+            z-index: 10000;
+            animation: toastInOut 2s ease-in-out;
+            backdrop-filter: blur(20px);
+            border: 1px solid rgba(255, 255, 255, 0.1);
+        }
+
+        @keyframes toastInOut {
+            0%, 100% { 
+                opacity: 0; 
+                transform: translate(-50%, -50%) scale(0.8); 
+            }
+            20%, 80% { 
+                opacity: 1; 
+                transform: translate(-50%, -50%) scale(1); 
+            }
+        }
+        
+        /* Animazioni per aggiornamenti real-time */
+        .stat-value.updating {
+            animation: valueUpdate 0.5s ease;
+        }
+        
+        @keyframes valueUpdate {
+            0% { transform: scale(1); color: #667eea; }
+            50% { transform: scale(1.1); color: #4ade80; }
+            100% { transform: scale(1); color: #667eea; }
+        }
+        
+        /* Media queries per dispositivi specifici */
+        @media (max-width: 768px) {
+            .navbar {
+                flex-direction: column;
+                gap: 1rem;
+                padding: 1rem;
+            }
+            
+            .nav-links {
+                justify-content: center;
+                width: 100%;
+            }
+            
+            .stats-grid {
+                grid-template-columns: 1fr;
+                gap: 1.5rem;
+            }
+            
+            .endpoints-grid {
+                grid-template-columns: 1fr;
+            }
+            
+            .status-banner {
+                text-align: left;
+                padding: 1.5rem;
+            }
+            
+            .connection-status {
+                bottom: 1rem;
+                right: 1rem;
+                left: 1rem;
+                border-radius: 12px;
+                text-align: center;
+            }
+
+            .container {
+                padding: 1rem;
+            }
+        }
+        
+        @media (max-width: 480px) {
+            .stat-card {
+                padding: 1.5rem;
+                min-height: 120px;
+            }
+            
+            .nav-links a {
+                padding: 0.5rem 0.75rem;
+                font-size: 0.85rem;
+            }
+
+            .endpoints-section {
+                padding: 1.5rem;
+            }
+        }
+    </style>
+</head>
+<body>
+    <nav class="navbar">
+        <h1><i class="fas fa-rocket"></i> Proxy Dashboard</h1>
+        <div class="nav-links">
+            <a href="/admin/config"><i class="fas fa-cog"></i> Config</a>
+            <a href="/admin/logs"><i class="fas fa-file-alt"></i> Log</a>
+            <a href="/admin"><i class="fas fa-home"></i> Admin</a>
+            <a href="/stats"><i class="fas fa-chart-line"></i> API</a>
+            <a href="/logout"><i class="fas fa-sign-out-alt"></i> Logout</a>
+        </div>
+    </nav>
+
+    <div class="connection-indicator" id="connectionIndicator"></div>
+
+    <div class="container">
+        <div class="status-banner">
+            <h2><i class="fas fa-check-circle"></i> Sistema Operativo</h2>
+            <p><strong><i class="fas fa-link"></i> Base URL DaddyLive:</strong> <span id="daddyBaseUrl">{{ daddy_base_url }}</span></p>
+            <p><strong><i class="fas fa-network-wired"></i> Proxy:</strong> <span id="proxyCount">{{ proxy_count }}</span> | <strong><i class="fas fa-users"></i> Sessioni:</strong> <span id="sessionCount">{{ session_count }}</span></p>
+        </div>
+
+        <div class="stats-grid">
+            <div class="stat-card">
+                <div class="stat-header">
+                    <i class="fas fa-memory stat-icon"></i>
+                    <span class="stat-title">Utilizzo RAM</span>
+                </div>
+                <div class="stat-value" id="ramUsage">{{ "%.1f"|format(stats.ram_usage) }}%</div>
+                <div class="progress-bar">
+                    <div class="progress-fill" id="ramProgress"></div>
+                </div>
+                <div class="stat-subtitle">
+                    <span id="ramUsed">{{ "%.2f"|format(stats.ram_used_gb) }}</span> GB / 
+                    <span id="ramTotal">{{ "%.2f"|format(stats.ram_total_gb) }}</span> GB
+                </div>
+            </div>
+
+            <div class="stat-card">
+                <div class="stat-header">
+                    <i class="fas fa-tachometer-alt stat-icon"></i>
+                    <span class="stat-title">Banda di Rete</span>
+                </div>
+                <div class="stat-value" id="bandwidthUsage">{{ "%.2f"|format(stats.bandwidth_usage) }}</div>
+                <div class="stat-subtitle">MB/s - Utilizzo corrente</div>
+            </div>
+
+            <div class="stat-card">
+                <div class="stat-header">
+                    <i class="fas fa-upload stat-icon"></i>
+                    <span class="stat-title">Dati Inviati</span>
+                </div>
+                <div class="stat-value" id="networkSent">{{ "%.1f"|format(stats.network_sent) }}</div>
+                <div class="stat-subtitle">MB - Totale dalla partenza</div>
+            </div>
+
+            <div class="stat-card">
+                <div class="stat-header">
+                    <i class="fas fa-download stat-icon"></i>
+                    <span class="stat-title">Dati Ricevuti</span>
+                </div>
+                <div class="stat-value" id="networkRecv">{{ "%.1f"|format(stats.network_recv) }}</div>
+                <div class="stat-subtitle">MB - Totale dalla partenza</div>
+            </div>
+        </div>
+
+        <div class="endpoints-section">
+            <h3><i class="fas fa-link"></i> Endpoints Disponibili</h3>
+            <div class="endpoints-grid">
+                <div class="endpoint-card" onclick="copyToClipboard('/proxy')">
+                    <h4><i class="fas fa-code"></i> /proxy</h4>
+                    <p>Proxy per liste M3U con header personalizzati</p>
+                </div>
+                <div class="endpoint-card" onclick="copyToClipboard('/proxy/m3u')">
+                    <h4><i class="fas fa-play-circle"></i> /proxy/m3u</h4>
+                    <p>Proxy per file M3U8 con risoluzione DaddyLive</p>
+                </div>
+                <div class="endpoint-card" onclick="copyToClipboard('/proxy/resolve')">
+                    <h4><i class="fas fa-search"></i> /proxy/resolve</h4>
+                    <p>Risoluzione diretta URL DaddyLive</p>
+                </div>
+                <div class="endpoint-card" onclick="copyToClipboard('/proxy/ts')">
+                    <h4><i class="fas fa-video"></i> /proxy/ts</h4>
+                    <p>Proxy per segmenti TS con caching</p>
+                </div>
+                <div class="endpoint-card" onclick="copyToClipboard('/proxy/key')">
+                    <h4><i class="fas fa-key"></i> /proxy/key</h4>
+                    <p>Proxy per chiavi di decrittazione AES-128</p>
+                </div>
+                <div class="endpoint-card" onclick="copyToClipboard('/proxy/mpd')">
+                    <h4><i class="fas fa-tv"></i> /proxy/mpd</h4>
+                    <p>Proxy per manifest MPEG-DASH con supporto live e VOD</p>
+                </div>
+                <div class="endpoint-card" onclick="copyToClipboard('/proxy/dash-segment')">
+                    <h4><i class="fas fa-film"></i> /proxy/dash-segment</h4>
+                    <p>Proxy per segmenti DASH con caching ottimizzato</p>
+                </div>
+                <div class="endpoint-card" onclick="copyToClipboard('/proxy/dash-master')">
+                    <h4><i class="fas fa-list"></i> /proxy/dash-master</h4>
+                    <p>Generatore master manifest DASH</p>
+                </div>
+                <div class="endpoint-card" onclick="copyToClipboard('/admin/debug/env')">
+                    <h4><i class="fas fa-bug"></i> /admin/debug/env</h4>
+                    <p>Debug variabili d'ambiente e configurazioni</p>
+                </div>
+                <div class="endpoint-card" onclick="copyToClipboard('/admin/debug/proxies')">
+                    <h4><i class="fas fa-network-wired"></i> /admin/debug/proxies</h4>
+                    <p>Debug proxy combinati da file e variabili d'ambiente</p>
+                </div>
+                <div class="endpoint-card" onclick="copyToClipboard('/test/mpd-debug')">
+                    <h4><i class="fas fa-vial"></i> /test/mpd-debug</h4>
+                    <p>Test e debug specifico per manifest MPD</p>
+                </div>
+            </div>
+        </div>
+    </div>
+    
+    <div class="connection-status" id="connectionStatus">
+        <i class="fas fa-sync-alt" id="statusIcon"></i>
+        <span id="statusText">Connessione in corso...</span>
+    </div>
+
+    <script>
+        // Inizializzazione WebSocket
+        const socket = io();
+        let isConnected = false;
+        let lastUpdateTime = Date.now();
+
+        // Elementi DOM
+        const connectionIndicator = document.getElementById('connectionIndicator');
+        const connectionStatus = document.getElementById('connectionStatus');
+        const statusIcon = document.getElementById('statusIcon');
+        const statusText = document.getElementById('statusText');
+
+        // Gestione connessione WebSocket
+        socket.on('connect', function() {
+            isConnected = true;
+            updateConnectionStatus(true);
+            console.log('WebSocket connesso');
+        });
+
+        socket.on('disconnect', function() {
+            isConnected = false;
+            updateConnectionStatus(false);
+            console.log('WebSocket disconnesso');
+        });
+
+        // Aggiornamento statistiche in tempo reale
+        socket.on('stats_update', function(data) {
+            lastUpdateTime = Date.now();
+            updateStats(data);
+        });
+
+        function updateConnectionStatus(connected) {
+            if (connected) {
+                connectionIndicator.classList.remove('disconnected');
+                connectionStatus.classList.remove('disconnected');
+                statusIcon.className = 'fas fa-check-circle';
+                statusText.textContent = 'Connesso - Aggiornamenti real-time';
+            } else {
+                connectionIndicator.classList.add('disconnected');
+                connectionStatus.classList.add('disconnected');
+                statusIcon.className = 'fas fa-exclamation-triangle';
+                statusText.textContent = 'Disconnesso - Riconnessione...';
+            }
+        }
+
+        function updateStats(stats) {
+            // Aggiorna RAM
+            updateStatValue('ramUsage', stats.ram_usage.toFixed(1) + '%');
+            updateStatValue('ramUsed', stats.ram_used_gb.toFixed(2));
+            updateStatValue('ramTotal', stats.ram_total_gb.toFixed(2));
+            
+            // Aggiorna progress bar RAM
+            const ramProgress = document.getElementById('ramProgress');
+            ramProgress.style.width = stats.ram_usage + '%';
+
+            // Aggiorna banda
+            updateStatValue('bandwidthUsage', stats.bandwidth_usage.toFixed(2));
+            
+            // Aggiorna rete
+            updateStatValue('networkSent', stats.network_sent.toFixed(1));
+            updateStatValue('networkRecv', stats.network_recv.toFixed(1));
+            
+            // Aggiorna contatori
+            updateStatValue('proxyCount', stats.proxy_count);
+            updateStatValue('sessionCount', stats.session_count);
+            
+            // Aggiorna URL base se cambiato
+            if (stats.daddy_base_url) {
+                document.getElementById('daddyBaseUrl').textContent = stats.daddy_base_url;
+            }
+        }
+
+        function updateStatValue(elementId, newValue) {
+            const element = document.getElementById(elementId);
+            if (element && element.textContent !== newValue.toString()) {
+                element.textContent = newValue;
+                element.classList.add('updating');
+                setTimeout(() => element.classList.remove('updating'), 500);
+            }
+        }
+
+        // Funzioni utility moderne
+        function copyToClipboard(text) {
+            const fullUrl = window.location.origin + text;
+            if (navigator.clipboard) {
+                navigator.clipboard.writeText(fullUrl).then(() => {
+                    showToast('URL copiato: ' + text);
+                });
+            } else {
+                // Fallback per browser più vecchi
+                const textArea = document.createElement('textarea');
+                textArea.value = fullUrl;
+                document.body.appendChild(textArea);
+                textArea.select();
+                document.execCommand('copy');
+                document.body.removeChild(textArea);
+                showToast('URL copiato: ' + text);
+            }
+        }
+
+        function showToast(message) {
+            const toast = document.createElement('div');
+            toast.className = 'toast';
+            toast.innerHTML = `<i class="fas fa-check-circle"></i> ${message}`;
+            document.body.appendChild(toast);
+            
+            setTimeout(() => {
+                if (document.body.contains(toast)) {
+                    document.body.removeChild(toast);
+                }
+            }, 2000);
+        }
+
+        // Gestione touch per feedback visivo
+        document.querySelectorAll('.endpoint-card').forEach(element => {
+            element.addEventListener('touchstart', function() {
+                this.style.transform = 'scale(0.98)';
+            });
+            
+            element.addEventListener('touchend', function() {
+                this.style.transform = '';
+            });
+        });
+
+        // Controllo connessione periodico
+        setInterval(() => {
+            if (Date.now() - lastUpdateTime > 10000) { // 10 secondi senza aggiornamenti
+                updateConnectionStatus(false);
+            }
+        }, 5000);
+
+        // Gestione orientamento mobile
+        window.addEventListener('orientationchange', function() {
+            setTimeout(() => {
+                window.scrollTo(0, 0);
+            }, 100);
+        });
+
+        // Prevenzione zoom accidentale su iOS
+        document.addEventListener('gesturestart', function (e) {
+            e.preventDefault();
+        });
+
+        // Inizializzazione
+        document.addEventListener('DOMContentLoaded', function() {
+            console.log('Dashboard moderna inizializzata');
+            // Set initial RAM progress bar width
+            const ramProgress = document.getElementById('ramProgress');
+            ramProgress.style.width = '{{ stats.ram_usage }}%';
+        });
+    </script>
+    <script>
+    window.addEventListener('beforeunload', function() {
+        navigator.sendBeacon('/logout');
+    });
+    </script>
+</body>
+</html>

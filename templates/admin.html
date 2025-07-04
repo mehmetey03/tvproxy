@@ -1,1 +1,419 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Pannello Amministrazione</title>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css" rel="stylesheet">
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
 
+        body {
+            font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            color: #333;
+        }
+
+        .navbar {
+            background: rgba(255, 255, 255, 0.95);
+            backdrop-filter: blur(20px);
+            border-bottom: 1px solid rgba(255, 255, 255, 0.2);
+            padding: 1rem 2rem;
+            position: sticky;
+            top: 0;
+            z-index: 1000;
+            box-shadow: 0 4px 30px rgba(0, 0, 0, 0.1);
+        }
+
+        .navbar-content {
+            max-width: 1400px;
+            margin: 0 auto;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+
+        .navbar h1 {
+            font-size: 1.5rem;
+            font-weight: 700;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            background-clip: text;
+        }
+
+        .nav-links {
+            display: flex;
+            gap: 1rem;
+        }
+
+        .nav-links a {
+            color: #667eea;
+            text-decoration: none;
+            padding: 0.5rem 1rem;
+            border-radius: 12px;
+            transition: all 0.3s ease;
+            font-weight: 500;
+        }
+
+        .nav-links a:hover {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            transform: translateY(-2px);
+        }
+
+        .container {
+            max-width: 1400px;
+            margin: 2rem auto;
+            padding: 0 2rem;
+        }
+
+        .admin-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(350px, 1fr));
+            gap: 2rem;
+            margin-top: 2rem;
+        }
+
+        .admin-card {
+            background: rgba(255, 255, 255, 0.95);
+            backdrop-filter: blur(20px);
+            border: 1px solid rgba(255, 255, 255, 0.2);
+            border-radius: 20px;
+            padding: 2rem;
+            text-align: center;
+            transition: all 0.3s ease;
+            position: relative;
+            overflow: hidden;
+        }
+
+        .admin-card::before {
+            content: '';
+            position: absolute;
+            top: 0;
+            left: 0;
+            right: 0;
+            height: 4px;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+        }
+
+        .admin-card:hover {
+            transform: translateY(-8px);
+            box-shadow: 0 20px 40px rgba(0, 0, 0, 0.1);
+        }
+
+        .admin-card h3 {
+            font-size: 1.25rem;
+            font-weight: 600;
+            margin-bottom: 1rem;
+            color: #2d3748;
+        }
+
+        .admin-card p {
+            color: #718096;
+            margin-bottom: 1.5rem;
+            line-height: 1.6;
+        }
+
+        .btn {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            padding: 0.75rem 1.5rem;
+            border: none;
+            border-radius: 12px;
+            cursor: pointer;
+            text-decoration: none;
+            display: inline-flex;
+            align-items: center;
+            gap: 0.5rem;
+            font-weight: 500;
+            transition: all 0.3s ease;
+            box-shadow: 0 4px 15px rgba(102, 126, 234, 0.3);
+        }
+
+        .btn:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 8px 25px rgba(102, 126, 234, 0.4);
+        }
+
+        .btn i {
+            font-size: 1.1rem;
+        }
+
+        .stats-overview {
+            background: rgba(255, 255, 255, 0.95);
+            backdrop-filter: blur(20px);
+            border-radius: 20px;
+            padding: 2rem;
+            margin-bottom: 2rem;
+            border: 1px solid rgba(255, 255, 255, 0.2);
+        }
+
+        .stats-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 1.5rem;
+        }
+
+        .stat-item {
+            text-align: center;
+            padding: 1rem;
+            border-radius: 12px;
+            background: linear-gradient(135deg, rgba(102, 126, 234, 0.1) 0%, rgba(118, 75, 162, 0.1) 100%);
+        }
+
+        .stat-number {
+            font-size: 2rem;
+            font-weight: 700;
+            color: #667eea;
+            margin-bottom: 0.5rem;
+        }
+
+        .stat-label {
+            color: #718096;
+            font-size: 0.9rem;
+        }
+
+        @media (max-width: 768px) {
+            .container {
+                padding: 0 1rem;
+            }
+            
+            .admin-grid {
+                grid-template-columns: 1fr;
+                gap: 1rem;
+            }
+            
+            .navbar-content {
+                flex-direction: column;
+                gap: 1rem;
+            }
+            
+            .nav-links {
+                flex-wrap: wrap;
+                justify-content: center;
+            }
+        }
+
+        .loading {
+            opacity: 0.7;
+            pointer-events: none;
+        }
+
+        .success-animation {
+            animation: successPulse 0.6s ease;
+        }
+
+        @keyframes successPulse {
+            0% { transform: scale(1); }
+            50% { transform: scale(1.05); }
+            100% { transform: scale(1); }
+        }
+    </style>
+</head>
+<body>
+    <div class="navbar">
+        <div class="navbar-content">
+            <h1><i class="fas fa-cogs"></i> Pannello di Amministrazione</h1>
+            <div class="nav-links">
+                <a href="/dashboard"><i class="fas fa-chart-line"></i> Dashboard</a>
+                <a href="/logout"><i class="fas fa-sign-out-alt"></i> Logout</a>
+            </div>
+        </div>
+    </div>
+    
+    <div class="container">
+        <div class="stats-overview">
+            <h2 style="margin-bottom: 1.5rem; color: #2d3748; text-align: center;">
+                <i class="fas fa-tachometer-alt"></i> Panoramica Sistema
+            </h2>
+            <div class="stats-grid">
+                <div class="stat-item">
+                    <div class="stat-number" id="activeConnections">-</div>
+                    <div class="stat-label">Connessioni Attive</div>
+                </div>
+                <div class="stat-item">
+                    <div class="stat-number" id="cacheSize">-</div>
+                    <div class="stat-label">Dimensione Cache</div>
+                </div>
+                <div class="stat-item">
+                    <div class="stat-number" id="uptime">-</div>
+                    <div class="stat-label">Uptime</div>
+                </div>
+                <div class="stat-item">
+                    <div class="stat-number" id="requestsPerMin">-</div>
+                    <div class="stat-label">Richieste/min</div>
+                </div>
+            </div>
+        </div>
+
+        <div class="admin-grid">
+            <div class="admin-card">
+                <h3><i class="fas fa-chart-line"></i> Monitoraggio Sistema</h3>
+                <p>Visualizza statistiche dettagliate del sistema in tempo reale con grafici interattivi</p>
+                <a href="/dashboard" class="btn">
+                    <i class="fas fa-arrow-right"></i>
+                    Vai alla Dashboard
+                </a>
+            </div>
+            
+            <div class="admin-card">
+                <h3><i class="fas fa-cog"></i> Configurazioni</h3>
+                <p>Gestisci le impostazioni del proxy, timeout, cache e parametri di sicurezza</p>
+                <a href="/admin/config" class="btn">
+                    <i class="fas fa-arrow-right"></i>
+                    Configura Sistema
+                </a>
+            </div>
+            
+            <div class="admin-card">
+                <h3><i class="fas fa-file-alt"></i> Log Sistema</h3>
+                <p>Visualizza i log delle attività in tempo reale con streaming e filtri avanzati</p>
+                <a href="/admin/logs" class="btn">
+                    <i class="fas fa-arrow-right"></i>
+                    Visualizza Log
+                </a>
+            </div>
+            
+            <div class="admin-card">
+                <h3><i class="fas fa-broom"></i> Gestione Cache</h3>
+                <p>Pulisci e gestisci la cache del sistema con statistiche dettagliate</p>
+                <button class="btn" onclick="clearCache()">
+                    <i class="fas fa-trash"></i>
+                    Pulisci Cache
+                </button>
+            </div>
+            
+            <div class="admin-card">
+                <h3><i class="fas fa-code"></i> API Statistiche</h3>
+                <p>Accesso alle API JSON per integrazioni esterne e monitoraggio</p>
+                <a href="/stats" class="btn">
+                    <i class="fas fa-arrow-right"></i>
+                    API Endpoint
+                </a>
+            </div>
+            
+            <div class="admin-card">
+                <h3><i class="fas fa-shield-alt"></i> Sicurezza</h3>
+                <p>Gestione IP consentiti, credenziali di accesso e impostazioni di sicurezza</p>
+                <a href="/admin/config#security" class="btn">
+                    <i class="fas fa-arrow-right"></i>
+                    Impostazioni Sicurezza
+                </a>
+            </div>
+            
+            <div class="admin-card">
+                <h3><i class="fas fa-bug"></i> Debug Variabili</h3>
+                <p>Verifica variabili d'ambiente e configurazioni attive del sistema</p>
+                <a href="/admin/debug/env" class="btn">
+                    <i class="fas fa-arrow-right"></i>
+                    Debug Env
+                </a>
+            </div>
+            
+            <div class="admin-card">
+                <h3><i class="fas fa-network-wired"></i> Debug Proxy</h3>
+                <p>Visualizza proxy combinati da file e variabili d'ambiente</p>
+                <a href="/admin/debug/proxies" class="btn">
+                    <i class="fas fa-arrow-right"></i>
+                    Debug Proxy
+                </a>
+            </div>
+            
+            <div class="admin-card">
+                <h3><i class="fas fa-tv"></i> Test MPD</h3>
+                <p>Test e debug specifico per manifest MPEG-DASH e streaming</p>
+                <a href="/test/mpd-debug" class="btn">
+                    <i class="fas fa-arrow-right"></i>
+                    Test MPD
+                </a>
+            </div>
+        </div>
+    </div>
+    
+    <script>
+        // Carica statistiche in tempo reale
+        function loadStats() {
+            fetch('/stats')
+                .then(response => response.json())
+                .then(data => {
+                    document.getElementById('activeConnections').textContent = data.active_connections || '0';
+                    document.getElementById('cacheSize').textContent = data.cache_size || '0 MB';
+                    document.getElementById('uptime').textContent = data.uptime || '0h';
+                    document.getElementById('requestsPerMin').textContent = data.requests_per_min || '0';
+                })
+                .catch(error => {
+                    console.log('Errore nel caricamento statistiche:', error);
+                });
+        }
+
+        // Aggiorna statistiche ogni 30 secondi
+        loadStats();
+        setInterval(loadStats, 30000);
+
+        function clearCache() {
+            if(confirm('Sei sicuro di voler pulire la cache del sistema?')) {
+                const btn = event.target;
+                btn.classList.add('loading');
+                btn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Pulendo...';
+                
+                fetch('/admin/clear-cache', {
+                    method: 'POST',
+                    credentials: 'include',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'X-Requested-With': 'XMLHttpRequest'
+                    }
+                })
+                .then(response => {
+                    if (!response.ok) {
+                        throw new Error(`HTTP error! status: ${response.status}`);
+                    }
+                    return response.json();
+                })
+                .then(data => {
+                    btn.classList.remove('loading');
+                    btn.classList.add('success-animation');
+                    
+                    if(data.status === 'success') {
+                        btn.innerHTML = '<i class="fas fa-check"></i> Cache Pulita!';
+                        setTimeout(() => {
+                            btn.innerHTML = '<i class="fas fa-trash"></i> Pulisci Cache';
+                            btn.classList.remove('success-animation');
+                        }, 2000);
+                        loadStats(); // Ricarica statistiche
+                    } else {
+                        btn.innerHTML = '<i class="fas fa-trash"></i> Pulisci Cache';
+                        alert(data.message || 'Errore durante la pulizia');
+                    }
+                })
+                .catch(error => {
+                    console.error('Errore:', error);
+                    btn.classList.remove('loading');
+                    btn.innerHTML = '<i class="fas fa-trash"></i> Pulisci Cache';
+                    alert('Errore durante la pulizia della cache: ' + error.message);
+                });
+            }
+        }
+
+        // Animazioni di entrata per le card
+        document.addEventListener('DOMContentLoaded', function() {
+            const cards = document.querySelectorAll('.admin-card');
+            cards.forEach((card, index) => {
+                card.style.opacity = '0';
+                card.style.transform = 'translateY(20px)';
+                setTimeout(() => {
+                    card.style.transition = 'all 0.6s ease';
+                    card.style.opacity = '1';
+                    card.style.transform = 'translateY(0)';
+                }, index * 100);
+            });
+        });
+    </script>
+</body>
+</html>

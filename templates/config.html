@@ -1,0 +1,753 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Gestione Configurazioni - Proxy</title>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css" rel="stylesheet">
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            color: #333;
+        }
+
+        .navbar {
+            background: rgba(255, 255, 255, 0.95);
+            backdrop-filter: blur(20px);
+            border-bottom: 1px solid rgba(255, 255, 255, 0.2);
+            padding: 1rem 2rem;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            box-shadow: 0 4px 30px rgba(0, 0, 0, 0.1);
+            position: sticky;
+            top: 0;
+            z-index: 1000;
+        }
+
+        .navbar h1 {
+            font-size: 1.5rem;
+            font-weight: 700;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            background-clip: text;
+        }
+
+        .nav-links {
+            display: flex;
+            gap: 1rem;
+        }
+
+        .nav-links a {
+            color: #667eea;
+            text-decoration: none;
+            padding: 0.5rem 1rem;
+            border-radius: 12px;
+            transition: all 0.3s ease;
+            font-weight: 500;
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+        }
+
+        .nav-links a:hover {
+            background: rgba(102, 126, 234, 0.1);
+            transform: translateY(-2px);
+        }
+
+        .container {
+            max-width: 1200px;
+            margin: 2rem auto;
+            background: rgba(255, 255, 255, 0.95);
+            backdrop-filter: blur(20px);
+            padding: 2.5rem;
+            border-radius: 20px;
+            box-shadow: 0 20px 40px rgba(0, 0, 0, 0.1);
+            border: 1px solid rgba(255, 255, 255, 0.2);
+        }
+
+        .form-group {
+            margin-bottom: 1.5rem;
+            position: relative;
+        }
+
+        .form-group label {
+            display: block;
+            margin-bottom: 0.5rem;
+            font-weight: 600;
+            color: #2d3748;
+            font-size: 0.95rem;
+        }
+
+        .form-group input, 
+        .form-group textarea, 
+        .form-group select {
+            width: 100%;
+            padding: 1rem 1rem 1rem 3rem;
+            border: 2px solid #e2e8f0;
+            border-radius: 12px;
+            font-size: 1rem;
+            transition: all 0.3s ease;
+            background: rgba(255, 255, 255, 0.8);
+            backdrop-filter: blur(10px);
+        }
+
+        .form-group input:focus, 
+        .form-group textarea:focus, 
+        .form-group select:focus {
+            outline: none;
+            border-color: #667eea;
+            box-shadow: 0 0 0 3px rgba(102, 126, 234, 0.1);
+            transform: translateY(-2px);
+        }
+
+        .form-group i {
+            position: absolute;
+            left: 1rem;
+            top: 2.8rem;
+            color: #a0aec0;
+            transition: color 0.3s ease;
+        }
+
+        .form-group input:focus + i,
+        .form-group textarea:focus + i,
+        .form-group select:focus + i {
+            color: #667eea;
+        }
+
+        .form-group small {
+            color: #718096;
+            font-size: 0.85rem;
+            margin-top: 0.5rem;
+            display: block;
+        }
+
+        .config-section {
+            margin-bottom: 2.5rem;
+            padding: 2rem;
+            border: 1px solid rgba(102, 126, 234, 0.2);
+            border-radius: 16px;
+            background: rgba(102, 126, 234, 0.02);
+            backdrop-filter: blur(10px);
+            transition: all 0.3s ease;
+        }
+
+        .config-section:hover {
+            border-color: rgba(102, 126, 234, 0.3);
+            box-shadow: 0 8px 25px rgba(102, 126, 234, 0.1);
+        }
+
+        .config-section h3 {
+            margin: 0 0 1.5rem 0;
+            color: #667eea;
+            border-bottom: 2px solid rgba(102, 126, 234, 0.2);
+            padding-bottom: 0.75rem;
+            font-size: 1.25rem;
+            font-weight: 600;
+            display: flex;
+            align-items: center;
+            gap: 0.75rem;
+        }
+
+        .btn {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            padding: 0.875rem 1.75rem;
+            border: none;
+            border-radius: 12px;
+            cursor: pointer;
+            font-size: 1rem;
+            font-weight: 600;
+            margin-right: 0.75rem;
+            transition: all 0.3s ease;
+            display: inline-flex;
+            align-items: center;
+            gap: 0.5rem;
+            box-shadow: 0 4px 15px rgba(102, 126, 234, 0.3);
+        }
+
+        .btn:hover {
+            transform: translateY(-3px);
+            box-shadow: 0 8px 25px rgba(102, 126, 234, 0.4);
+        }
+
+        .btn-secondary {
+            background: linear-gradient(135deg, #6c757d 0%, #495057 100%);
+            box-shadow: 0 4px 15px rgba(108, 117, 125, 0.3);
+        }
+
+        .btn-secondary:hover {
+            box-shadow: 0 8px 25px rgba(108, 117, 125, 0.4);
+        }
+
+        .alert {
+            padding: 1rem 1.5rem;
+            margin: 1.5rem 0;
+            border-radius: 12px;
+            display: none;
+            font-weight: 500;
+            animation: slideIn 0.3s ease;
+        }
+
+        @keyframes slideIn {
+            from {
+                opacity: 0;
+                transform: translateY(-10px);
+            }
+            to {
+                opacity: 1;
+                transform: translateY(0);
+            }
+        }
+
+        .alert-success {
+            background: rgba(56, 161, 105, 0.1);
+            border: 1px solid rgba(56, 161, 105, 0.2);
+            color: #38a169;
+        }
+
+        .alert-error {
+            background: rgba(229, 62, 62, 0.1);
+            border: 1px solid rgba(229, 62, 62, 0.2);
+            color: #e53e3e;
+        }
+
+        .row {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+            gap: 1.5rem;
+        }
+
+        .action-box {
+            margin-top: 2.5rem;
+            padding: 2rem;
+            background: rgba(255, 193, 7, 0.05);
+            border: 2px solid rgba(255, 193, 7, 0.2);
+            border-radius: 16px;
+            box-shadow: 0 8px 25px rgba(255, 193, 7, 0.1);
+            backdrop-filter: blur(10px);
+        }
+
+        .action-box h3 {
+            color: #d69e2e;
+            margin-bottom: 1rem;
+            font-size: 1.25rem;
+            font-weight: 600;
+            display: flex;
+            align-items: center;
+            gap: 0.75rem;
+        }
+
+        .action-buttons {
+            display: flex;
+            gap: 1rem;
+            margin-bottom: 1rem;
+            flex-wrap: wrap;
+        }
+
+        .loading {
+            opacity: 0.7;
+            pointer-events: none;
+        }
+
+        .success-animation {
+            animation: successPulse 0.6s ease;
+        }
+
+        @keyframes successPulse {
+            0% { transform: scale(1); }
+            50% { transform: scale(1.05); }
+            100% { transform: scale(1); }
+        }
+
+        @media (max-width: 768px) {
+            .container {
+                margin: 1rem;
+                padding: 1.5rem;
+            }
+            
+            .config-section {
+                padding: 1.5rem;
+                margin-bottom: 1.5rem;
+            }
+            
+            .action-box {
+                padding: 1.5rem;
+            }
+            
+            .action-buttons {
+                flex-direction: column;
+            }
+            
+            .btn {
+                width: 100%;
+                margin-right: 0;
+                margin-bottom: 0.5rem;
+            }
+            
+            .navbar {
+                padding: 1rem;
+                flex-direction: column;
+                gap: 1rem;
+            }
+            
+            .nav-links {
+                flex-wrap: wrap;
+                justify-content: center;
+            }
+        }
+
+        @media (max-width: 480px) {
+            .container {
+                margin: 0.5rem;
+                padding: 1rem;
+            }
+            
+            .form-group input, 
+            .form-group textarea, 
+            .form-group select {
+                font-size: 16px;
+                padding: 0.875rem 0.875rem 0.875rem 2.5rem;
+            }
+            
+            .form-group i {
+                top: 2.6rem;
+            }
+        }
+    </style>
+</head>
+<body>
+    <nav class="navbar">
+        <h1><i class="fas fa-cog"></i> Gestione Configurazioni</h1>
+        <div class="nav-links">
+            <a href="/admin"><i class="fas fa-arrow-left"></i> Admin</a>
+            <a href="/dashboard"><i class="fas fa-chart-line"></i> Dashboard</a>
+            <a href="/logout"><i class="fas fa-sign-out-alt"></i> Logout</a>
+        </div>
+    </nav>
+    
+    <div class="container">
+        <div class="alert alert-success" id="successAlert">
+            <i class="fas fa-check-circle"></i> Configurazione salvata con successo!
+        </div>
+        
+        <div class="alert alert-error" id="errorAlert">
+            <i class="fas fa-exclamation-triangle"></i> Errore durante il salvataggio.
+        </div>
+        
+        <form id="configForm">
+            <!-- Sezione Proxy -->
+            <div class="config-section">
+                <h3><i class="fas fa-network-wired"></i> Configurazioni Proxy</h3>
+                <div class="form-group">
+                    <label for="socks5_proxy">Proxy SOCKS5:</label>
+                    <textarea id="socks5_proxy" name="SOCKS5_PROXY" rows="3" placeholder="socks5://user:pass@proxy1:1080,socks5://user:pass@proxy2:1080">{{ config.SOCKS5_PROXY }}</textarea>
+                    <i class="fas fa-shield-alt"></i>
+                    <small>Lista di proxy SOCKS5 separati da virgola</small>
+                </div>
+                <div class="row">
+                    <div class="col">
+                        <div class="form-group">
+                            <label for="http_proxy">Proxy HTTP:</label>
+                            <textarea id="http_proxy" name="HTTP_PROXY" rows="2" placeholder="http://proxy1:8080,http://proxy2:8080">{{ config.HTTP_PROXY }}</textarea>
+                            <i class="fas fa-globe"></i>
+                            <small>Lista di proxy HTTP separati da virgola</small>
+                        </div>
+                    </div>
+                    <div class="col">
+                        <div class="form-group">
+                            <label for="https_proxy">Proxy HTTPS:</label>
+                            <textarea id="https_proxy" name="HTTPS_PROXY" rows="2" placeholder="https://proxy1:8080,https://proxy2:8080">{{ config.HTTPS_PROXY }}</textarea>
+                            <i class="fas fa-lock"></i>
+                            <small>Lista di proxy HTTPS separati da virgola</small>
+                        </div>
+                    </div>
+                </div>
+                <div class="form-group">
+                    <label for="no_proxy_domains"><b>Domini senza proxy:</b></label>
+                    <input type="text" id="no_proxy_domains" name="NO_PROXY_DOMAINS" value="{{ config.NO_PROXY_DOMAINS }}" placeholder="vavoo.to,newkso.ru,daddylive.sx">
+                    <i class="fas fa-ban"></i>
+                    <small>Lista di domini separati da virgola per cui NON usare il proxy</small>
+                </div>
+            </div>
+            
+            <!-- Sezione Timeouts -->
+            <div class="config-section">
+                <h3><i class="fas fa-clock"></i> Configurazioni Timeout</h3>
+                <div class="row">
+                    <div class="col">
+                        <div class="form-group">
+                            <label for="request_timeout">Request Timeout (secondi):</label>
+                            <input type="number" id="request_timeout" name="REQUEST_TIMEOUT" value="{{ config.REQUEST_TIMEOUT }}" min="5" max="300">
+                            <i class="fas fa-hourglass-half"></i>
+                            <small>Timeout per le richieste HTTP</small>
+                        </div>
+                    </div>
+                    <div class="col">
+                        <div class="form-group">
+                            <label for="keep_alive_timeout">Keep-Alive Timeout (secondi):</label>
+                            <input type="number" id="keep_alive_timeout" name="KEEP_ALIVE_TIMEOUT" value="{{ config.KEEP_ALIVE_TIMEOUT }}" min="60" max="3600">
+                            <i class="fas fa-link"></i>
+                            <small>Timeout per connessioni persistenti</small>
+                        </div>
+                    </div>
+                </div>
+                <div class="row">
+                    <div class="col">
+                        <div class="form-group">
+                            <label for="max_keep_alive_requests">Max Keep-Alive Requests:</label>
+                            <input type="number" id="max_keep_alive_requests" name="MAX_KEEP_ALIVE_REQUESTS" value="{{ config.MAX_KEEP_ALIVE_REQUESTS }}" min="1" max="10000">
+                            <i class="fas fa-list-ol"></i>
+                            <small>Numero massimo di richieste per connessione persistente (default: 1000)</small>
+                        </div>
+                    </div>
+                    <div class="col">
+                        <div class="form-group">
+                            <label for="pool_connections">Pool Connections:</label>
+                            <input type="number" id="pool_connections" name="POOL_CONNECTIONS" value="{{ config.POOL_CONNECTIONS }}" min="1" max="1000">
+                            <i class="fas fa-database"></i>
+                            <small>Numero di pool di connessioni per host (default: 20)</small>
+                        </div>
+                    </div>
+                </div>
+                <div class="row">
+                    <div class="col">
+                        <div class="form-group">
+                            <label for="pool_maxsize">Pool Max Size:</label>
+                            <input type="number" id="pool_maxsize" name="POOL_MAXSIZE" value="{{ config.POOL_MAXSIZE }}" min="1" max="1000">
+                            <i class="fas fa-expand-arrows-alt"></i>
+                            <small>Numero massimo di connessioni contemporanee per pool (default: 50)</small>
+                        </div>
+                    </div>
+                </div>
+            </div>
+            
+            <!-- Sezione Cache -->
+            <div class="config-section">
+                <h3><i class="fas fa-database"></i> Configurazioni Cache</h3>
+                <div class="row">
+                    <div class="col">
+                        <div class="form-group">
+                            <label for="cache_enabled"><b>Cache Abilitata:</b></label>
+                            <select id="cache_enabled" name="CACHE_ENABLED">
+                                <option value="true" {% if config.CACHE_ENABLED %}selected{% endif %}>Abilitata</option>
+                                <option value="false" {% if not config.CACHE_ENABLED %}selected{% endif %}>Disabilitata (stream diretto)</option>
+                            </select>
+                            <i class="fas fa-toggle-on"></i>
+                            <small>Se disabilitata, tutte le richieste vengono gestite in streaming diretto senza alcun caching.</small>
+                        </div>
+                        <div class="form-group">
+                            <label for="cache_ttl_m3u8">TTL Cache M3U8 (secondi):</label>
+                            <input type="number" id="cache_ttl_m3u8" name="CACHE_TTL_M3U8" value="{{ config.CACHE_TTL_M3U8 }}" min="1" max="300">
+                            <i class="fas fa-clock"></i>
+                            <small>Tempo di vita cache per file M3U8</small>
+                        </div>
+                        <div class="form-group">
+                            <label for="cache_maxsize_m3u8">Max Size Cache M3U8:</label>
+                            <input type="number" id="cache_maxsize_m3u8" name="CACHE_MAXSIZE_M3U8" value="{{ config.CACHE_MAXSIZE_M3U8 }}" min="10" max="1000">
+                            <i class="fas fa-hdd"></i>
+                            <small>Dimensione massima cache per M3U8</small>
+                        </div>
+                    </div>
+                    <div class="col">
+                        <div class="form-group">
+                            <label for="cache_ttl_ts">TTL Cache TS (secondi):</label>
+                            <input type="number" id="cache_ttl_ts" name="CACHE_TTL_TS" value="{{ config.CACHE_TTL_TS }}" min="60" max="3600">
+                            <i class="fas fa-video"></i>
+                            <small>Tempo di vita cache per segmenti TS</small>
+                        </div>
+                        <div class="form-group">
+                            <label for="cache_maxsize_ts">Max Size Cache TS:</label>
+                            <input type="number" id="cache_maxsize_ts" name="CACHE_MAXSIZE_TS" value="{{ config.CACHE_MAXSIZE_TS }}" min="100" max="5000">
+                            <i class="fas fa-film"></i>
+                            <small>Dimensione massima cache per TS</small>
+                        </div>
+                        <div class="form-group">
+                            <label for="cache_ttl_key">TTL Cache KEY (secondi):</label>
+                            <input type="number" id="cache_ttl_key" name="CACHE_TTL_KEY" value="{{ config.CACHE_TTL_KEY }}" min="1" max="300">
+                            <i class="fas fa-key"></i>
+                            <small>Tempo di vita cache per chiavi di decrittazione</small>
+                        </div>
+                        <div class="form-group">
+                            <label for="cache_maxsize_key">Max Size Cache KEY:</label>
+                            <input type="number" id="cache_maxsize_key" name="CACHE_MAXSIZE_KEY" value="{{ config.CACHE_MAXSIZE_KEY }}" min="10" max="1000">
+                            <i class="fas fa-key"></i>
+                            <small>Dimensione massima cache per chiavi</small>
+                        </div>
+                    </div>
+                </div>
+            </div>
+            
+            <!-- Sezione Cache DASH -->
+            <div class="config-section">
+                <h3><i class="fas fa-tv"></i> Configurazioni DASH</h3>
+                <div class="row">
+                    <div class="col">
+                        <div class="form-group">
+                            <label for="cache_ttl_mpd">TTL Cache MPD (secondi):</label>
+                            <input type="number" id="cache_ttl_mpd" name="CACHE_TTL_MPD" value="{{ config.CACHE_TTL_MPD or 30 }}" min="5" max="300">
+                            <i class="fas fa-file-video"></i>
+                            <small>Cache per manifest MPD (default: 30s)</small>
+                        </div>
+                    </div>
+                    <div class="col">
+                        <div class="form-group">
+                            <label for="cache_maxsize_mpd">Max Size Cache MPD:</label>
+                            <input type="number" id="cache_maxsize_mpd" name="CACHE_MAXSIZE_MPD" value="{{ config.CACHE_MAXSIZE_MPD or 100 }}" min="10" max="500">
+                            <i class="fas fa-list"></i>
+                            <small>Numero massimo di MPD in cache</small>
+                        </div>
+                    </div>
+                </div>
+            </div>
+            
+            <!-- Sezione Sicurezza -->
+            <div class="config-section" id="security">
+                <h3><i class="fas fa-shield-alt"></i> Configurazioni Sicurezza</h3>
+                <div class="row">
+                    <div class="col">
+                        <div class="form-group">
+                            <label for="admin_username">Username Admin:</label>
+                            <input type="text" id="admin_username" name="ADMIN_USERNAME" value="{{ config.ADMIN_USERNAME }}">
+                            <i class="fas fa-user"></i>
+                            <small>Username per accesso amministrativo</small>
+                        </div>
+                        <div class="form-group">
+                            <label for="verify_ssl">Verifica SSL:</label>
+                            <select id="verify_ssl" name="VERIFY_SSL">
+                                <option value="true" {% if config.VERIFY_SSL %}selected{% endif %}>Abilitato</option>
+                                <option value="false" {% if not config.VERIFY_SSL %}selected{% endif %}>Disabilitato</option>
+                            </select>
+                            <i class="fas fa-certificate"></i>
+                            <small>Verifica certificati SSL</small>
+                        </div>
+                    </div>
+                    <div class="col">
+                        <div class="form-group">
+                            <label for="admin_password">Password Admin:</label>
+                            <input type="password" id="admin_password" name="ADMIN_PASSWORD" value="{{ config.ADMIN_PASSWORD }}">
+                            <i class="fas fa-lock"></i>
+                            <small>Password per accesso amministrativo</small>
+                        </div>
+                        <div class="form-group">
+                            <label for="allowed_ips">IP Consentiti:</label>
+                            <input type="text" id="allowed_ips" name="ALLOWED_IPS" value="{{ config.ALLOWED_IPS }}" placeholder="192.168.1.100,10.0.0.1">
+                            <i class="fas fa-network-wired"></i>
+                            <small>Lista di IP separati da virgola (lascia vuoto per tutti)</small>
+                        </div>
+                    </div>
+                </div>
+            </div>
+            
+            <div class="action-box">
+                <h3><i class="fas fa-exclamation-triangle"></i> Azioni di Sistema</h3>
+                <p>Queste azioni possono influenzare il funzionamento del sistema. Utilizzare con cautela.</p>
+                
+                <div class="action-buttons">
+                    <button type="submit" class="btn" id="saveBtn">
+                        <i class="fas fa-save"></i> Salva Configurazione
+                    </button>
+                    <button type="button" class="btn btn-secondary" onclick="resetConfig()">
+                        <i class="fas fa-undo"></i> Ripristina Default
+                    </button>
+                    <button type="button" class="btn btn-secondary" onclick="testConfig()">
+                        <i class="fas fa-vial"></i> Test Configurazione
+                    </button>
+                    <button type="button" class="btn btn-secondary" onclick="exportConfig()">
+                        <i class="fas fa-download"></i> Esporta Config
+                    </button>
+                    <button type="button" class="btn btn-secondary" onclick="importConfig()">
+                        <i class="fas fa-upload"></i> Importa Config
+                    </button>
+                </div>
+            </div>
+        </form>
+        
+        <!-- Input file nascosto per import -->
+        <input type="file" id="importFile" accept=".json,.txt" style="display: none;" onchange="handleFileImport(event)">
+    </div>
+
+    <script>
+        document.getElementById('configForm').addEventListener('submit', function(e) {
+            e.preventDefault();
+            
+            const form = this;
+            const saveBtn = document.getElementById('saveBtn');
+            
+            // Add loading state
+            form.classList.add('loading');
+            saveBtn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Salvando...';
+            
+            const formData = new FormData(form);
+            const data = Object.fromEntries(formData);
+            
+            fetch('/admin/config/save', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'X-Requested-With': 'XMLHttpRequest'
+                },
+                body: JSON.stringify(data)
+            })
+            .then(response => response.json())
+            .then(result => {
+                form.classList.remove('loading');
+                saveBtn.innerHTML = '<i class="fas fa-save"></i> Salva Configurazione';
+                
+                if (result.success) {
+                    showAlert('success', result.message || 'Configurazione salvata con successo!');
+                    saveBtn.classList.add('success-animation');
+                    setTimeout(() => saveBtn.classList.remove('success-animation'), 600);
+                } else {
+                    showAlert('error', result.message || 'Errore durante il salvataggio');
+                }
+            })
+            .catch(error => {
+                form.classList.remove('loading');
+                saveBtn.innerHTML = '<i class="fas fa-save"></i> Salva Configurazione';
+                showAlert('error', 'Errore di connessione: ' + error.message);
+            });
+        });
+        
+        function showAlert(type, message) {
+            const alert = document.getElementById(type + 'Alert');
+            alert.innerHTML = `<i class="fas fa-${type === 'success' ? 'check-circle' : 'exclamation-triangle'}"></i> ${message}`;
+            alert.style.display = 'block';
+            
+            setTimeout(() => {
+                alert.style.display = 'none';
+            }, 5000);
+        }
+        
+        function resetConfig() {
+            if (confirm('Sei sicuro di voler ripristinare la configurazione di default?')) {
+                fetch('/admin/config/reset', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'X-Requested-With': 'XMLHttpRequest'
+                    }
+                })
+                .then(response => response.json())
+                .then(result => {
+                    if (result.success) {
+                        location.reload();
+                    } else {
+                        showAlert('error', result.message || 'Errore durante il ripristino');
+                    }
+                })
+                .catch(error => {
+                    showAlert('error', 'Errore di connessione: ' + error.message);
+                });
+            }
+        }
+        
+        function testConfig() {
+            const testBtn = event.target;
+            testBtn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Testando...';
+            testBtn.disabled = true;
+            
+            fetch('/admin/config/test', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'X-Requested-With': 'XMLHttpRequest'
+                }
+            })
+            .then(response => response.json())
+            .then(result => {
+                testBtn.innerHTML = '<i class="fas fa-vial"></i> Test Configurazione';
+                testBtn.disabled = false;
+                
+                if (result.success) {
+                    showAlert('success', 'Test configurazione completato con successo!');
+                } else {
+                    showAlert('error', 'Test configurazione fallito: ' + result.message);
+                }
+            })
+            .catch(error => {
+                testBtn.innerHTML = '<i class="fas fa-vial"></i> Test Configurazione';
+                testBtn.disabled = false;
+                showAlert('error', 'Errore durante il test: ' + error.message);
+            });
+        }
+        
+        function exportConfig() {
+            window.open('/admin/config/export', '_blank');
+        }
+        
+        function importConfig() {
+            document.getElementById('importFile').click();
+        }
+        
+        function handleFileImport(event) {
+            const file = event.target.files[0];
+            if (!file) return;
+            
+            const reader = new FileReader();
+            reader.onload = function(e) {
+                try {
+                    const config = JSON.parse(e.target.result);
+                    populateFormWithConfig(config);
+                    showAlert('success', 'Configurazione importata con successo!');
+                } catch (error) {
+                    showAlert('error', 'Errore nel parsing del file: ' + error.message);
+                }
+            };
+            
+            reader.onerror = function() {
+                showAlert('error', 'Errore nella lettura del file');
+            };
+            
+            reader.readAsText(file);
+            
+            // Reset input file
+            event.target.value = '';
+        }
+        
+        function populateFormWithConfig(config) {
+            // Popola tutti i campi del form con i valori importati
+            Object.keys(config).forEach(key => {
+                const element = document.querySelector(`[name="${key}"]`);
+                if (element) {
+                    if (element.type === 'checkbox') {
+                        element.checked = config[key] === 'true' || config[key] === true;
+                    } else if (element.type === 'select-one') {
+                        element.value = config[key].toString();
+                    } else {
+                        element.value = config[key];
+                    }
+                    
+                    // Aggiungi effetto visivo per i campi aggiornati
+                    element.style.backgroundColor = 'rgba(74, 222, 128, 0.1)';
+                    element.style.borderColor = '#4ade80';
+                    setTimeout(() => {
+                        element.style.backgroundColor = '';
+                        element.style.borderColor = '';
+                    }, 2000);
+                }
+            });
+        }
+        
+        // Add focus effects
+        document.querySelectorAll('input, textarea, select').forEach(element => {
+            element.addEventListener('focus', function() {
+                this.parentElement.style.transform = 'scale(1.02)';
+            });
+            
+            element.addEventListener('blur', function() {
+                this.parentElement.style.transform = 'scale(1)';
+            });
+        });
+    </script>
+</body>
+</html>
