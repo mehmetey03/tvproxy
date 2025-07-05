@@ -126,6 +126,8 @@ class VavooResolver:
         self.session.headers.update({
             'User-Agent': 'MediaHubMX/2'
         })
+        # Assicurati che la sessione non erediti proxy dalle variabili d'ambiente
+        self.session.trust_env = False
     
     def getAuthSignature(self):
         """Funzione che replica esattamente quella dell'addon utils.py"""
@@ -195,7 +197,12 @@ class VavooResolver:
             }
         }
         try:
-            resp = self.session.post("https://www.vavoo.tv/api/app/ping", json=data, headers=headers, timeout=10)
+            # Usa una sessione pulita senza proxy per la richiesta Vavoo
+            clean_session = requests.Session()
+            clean_session.trust_env = False  # Ignora variabili d'ambiente proxy
+            clean_session.headers.update(headers)
+            
+            resp = clean_session.post("https://www.vavoo.tv/api/app/ping", json=data, timeout=10, verify=VERIFY_SSL)
             resp.raise_for_status()
             return resp.json().get("addonSig")
         except Exception as e:
@@ -233,7 +240,12 @@ class VavooResolver:
         }
         
         try:
-            resp = self.session.post("https://vavoo.to/mediahubmx-resolve.json", json=data, headers=headers, timeout=10)
+            # Usa una sessione pulita senza proxy per la risoluzione Vavoo
+            clean_session = requests.Session()
+            clean_session.trust_env = False  # Ignora variabili d'ambiente proxy
+            clean_session.headers.update(headers)
+            
+            resp = clean_session.post("https://vavoo.to/mediahubmx-resolve.json", json=data, timeout=10, verify=VERIFY_SSL)
             resp.raise_for_status()
             
             if verbose:
