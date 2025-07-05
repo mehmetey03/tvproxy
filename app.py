@@ -24,10 +24,9 @@ import subprocess
 import concurrent.futures
 from flask_socketio import SocketIO, emit
 import threading
-import xml.etree.ElementTree as ET
-from mpegdash.parser import MPEGDASHParser
 from datetime import datetime, timedelta
 import math
+import ipaddress
 
 app = Flask(__name__)
 app.secret_key = os.environ.get('SECRET_KEY', 'your-secret-key-change-this-in-production')
@@ -35,6 +34,90 @@ socketio = SocketIO(app, cors_allowed_origins="*")
 app.permanent_session_lifetime = timedelta(minutes=5)
 
 load_dotenv()
+
+# --- Variabili globali ---
+PROXY_LIST = []
+SESSION_POOL = {}
+PROXY_BLACKLIST = {}
+system_stats = {}
+DADDYLIVE_BASE_URL = None
+LAST_FETCH_TIME = 0
+FETCH_INTERVAL = 3600
+
+# --- Funzioni di utilità ---
+def get_system_stats():
+    """Ottiene le statistiche di sistema in tempo reale"""
+    global system_stats
+    
+    # Memoria RAM
+    memory = psutil.virtual_memory()
+    system_stats['ram_usage'] = memory.percent
+    system_stats['ram_used_gb'] = memory.used / (1024**3)  # GB
+    system_stats['ram_total_gb'] = memory.total / (1024**3)  # GB
+    
+    # Utilizzo di rete
+    net_io = psutil.net_io_counters()
+    system_stats['network_sent'] = net_io.bytes_sent / (1024**2)  # MB
+    system_stats['network_recv'] = net_io.bytes_recv / (1024**2)  # MB
+    
+    # Statistiche pre-buffer
+    try:
+        with pre_buffer_manager.pre_buffer_lock:
+            total_segments = sum(len(segments) for segments in pre_buffer_manager.pre_buffer.values())
+            total_size = sum(
+                sum(len(content) for content in segments.values())
+                for segments in pre_buffer_manager.pre_buffer.values()
+            )
+            system_stats['prebuffer_streams'] = len(pre_buffer_manager.pre_buffer)
+            system_stats['prebuffer_segments'] = total_segments
+            system_stats['prebuffer_size_mb'] = round(total_size / (1024 * 1024), 2)
+            system_stats['prebuffer_threads'] = len(pre_buffer_manager.pre_buffer_threads)
+    except Exception as e:
+        app.logger.error(f"Errore nel calcolo statistiche pre-buffer: {e}")
+        system_stats['prebuffer_streams'] = 0
+        system_stats['prebuffer_segments'] = 0
+        system_stats['prebuffer_size_mb'] = 0
+        system_stats['prebuffer_threads'] = 0
+    
+    return system_stats
+
+def get_daddylive_base_url():
+    """Fetches and caches the dynamic base URL for DaddyLive."""
+    global DADDYLIVE_BASE_URL, LAST_FETCH_TIME
+    current_time = time.time()
+    
+    if DADDYLIVE_BASE_URL and (current_time - LAST_FETCH_TIME < FETCH_INTERVAL):
+        return DADDYLIVE_BASE_URL
+
+    try:
+        app.logger.info("Fetching dynamic DaddyLive base URL from GitHub...")
+        github_url = 'https://raw.githubusercontent.com/thecrewwh/dl_url/refs/heads/main/dl.xml'
+        
+        # Always use direct connection for GitHub to avoid proxy rate limiting (429 errors)
+        session = requests.Session()
+        session.trust_env = False  # Ignore environment proxy variables
+        main_url_req = session.get(
+            github_url,
+            timeout=REQUEST_TIMEOUT,
+            verify=VERIFY_SSL
+        )
+        main_url_req.raise_for_status()
+        content = main_url_req.text
+        match = re.search(r'src\s*=\s*"([^"]*)"', content)
+        if match:
+            base_url = match.group(1)
+            if not base_url.endswith('/'):
+                base_url += '/'
+            DADDYLIVE_BASE_URL = base_url
+            LAST_FETCH_TIME = current_time
+            app.logger.info(f"Dynamic DaddyLive base URL updated to: {DADDYLIVE_BASE_URL}")
+            return DADDYLIVE_BASE_URL
+    except requests.RequestException as e:
+        app.logger.error(f"Error fetching dynamic DaddyLive URL: {e}. Using fallback.")
+    
+    DADDYLIVE_BASE_URL = "https://daddylive.sx/"
+    app.logger.info(f"Using fallback DaddyLive URL: {DADDYLIVE_BASE_URL}")
+    return DADDYLIVE_BASE_URL
 
 # --- Classe VavooResolver per gestire i link Vavoo ---
 class VavooResolver:
@@ -183,19 +266,17 @@ ADMIN_PASSWORD = os.environ.get('ADMIN_PASSWORD', 'password123')
 ALLOWED_IPS = os.environ.get('ALLOWED_IPS', '').split(',') if os.environ.get('ALLOWED_IPS') else []
 
 def setup_all_caches():
-    global M3U8_CACHE, TS_CACHE, KEY_CACHE, MPD_CACHE
+    global M3U8_CACHE, TS_CACHE, KEY_CACHE
     config = config_manager.load_config()
     if config.get('CACHE_ENABLED', True):
         M3U8_CACHE = TTLCache(maxsize=config['CACHE_MAXSIZE_M3U8'], ttl=config['CACHE_TTL_M3U8'])
         TS_CACHE = TTLCache(maxsize=config['CACHE_MAXSIZE_TS'], ttl=config['CACHE_TTL_TS'])
         KEY_CACHE = TTLCache(maxsize=config['CACHE_MAXSIZE_KEY'], ttl=config['CACHE_TTL_KEY'])
-        MPD_CACHE = TTLCache(maxsize=config.get('CACHE_MAXSIZE_MPD', 100), ttl=config.get('CACHE_TTL_MPD', 30))
         app.logger.info("Cache ABILITATA su tutte le risorse.")
     else:
         M3U8_CACHE = {}
         TS_CACHE = {}
         KEY_CACHE = {}
-        MPD_CACHE = {}
         app.logger.warning("TUTTE LE CACHE DISABILITATE: stream diretto attivo.")
 
 def check_auth(username, password):
@@ -247,6 +328,136 @@ def login_required(f):
         return f(*args, **kwargs)
     return decorated_function
     
+# --- Funzioni di Supporto IPv6 ---
+def is_ipv6_address(ip_str):
+    """Verifica se un indirizzo è IPv6"""
+    try:
+        ipaddress.IPv6Address(ip_str)
+        return True
+    except ipaddress.AddressValueError:
+        return False
+
+def is_ipv4_address(ip_str):
+    """Verifica se un indirizzo è IPv4"""
+    try:
+        ipaddress.IPv4Address(ip_str)
+        return True
+    except ipaddress.AddressValueError:
+        return False
+
+def extract_ip_from_proxy_url(proxy_url):
+    """Estrae l'IP da un URL proxy"""
+    try:
+        parsed = urlparse(proxy_url)
+        host = parsed.hostname
+        if host:
+            # Rimuovi le parentesi quadre se presenti (IPv6)
+            if host.startswith('[') and host.endswith(']'):
+                host = host[1:-1]
+            return host
+    except Exception:
+        pass
+    return None
+
+def get_proxy_ip_version(proxy_url):
+    """Determina la versione IP di un proxy (IPv4/IPv6)"""
+    ip = extract_ip_from_proxy_url(proxy_url)
+    if not ip:
+        return "unknown"
+    
+    if is_ipv6_address(ip):
+        return "IPv6"
+    elif is_ipv4_address(ip):
+        return "IPv4"
+    else:
+        return "hostname"  # Dominio invece di IP
+
+# --- Sistema di Blacklist Proxy per Errori 429 ---
+PROXY_BLACKLIST = {}  # {proxy_url: {'last_error': timestamp, 'error_count': count, 'blacklisted_until': timestamp}}
+PROXY_BLACKLIST_LOCK = Lock()
+BLACKLIST_DURATION = 300  # 5 minuti di blacklist per errore 429
+MAX_ERRORS_BEFORE_PERMANENT = 5  # Dopo 5 errori, blacklist permanente per 1 ora
+
+def add_proxy_to_blacklist(proxy_url, error_type="429"):
+    """Aggiunge un proxy alla blacklist temporanea"""
+    global PROXY_BLACKLIST
+    
+    with PROXY_BLACKLIST_LOCK:
+        current_time = time.time()
+        
+        if proxy_url not in PROXY_BLACKLIST:
+            PROXY_BLACKLIST[proxy_url] = {
+                'last_error': current_time,
+                'error_count': 1,
+                'blacklisted_until': current_time + BLACKLIST_DURATION,
+                'error_type': error_type
+            }
+        else:
+            # Incrementa il contatore errori
+            PROXY_BLACKLIST[proxy_url]['error_count'] += 1
+            PROXY_BLACKLIST[proxy_url]['last_error'] = current_time
+            
+            # Se troppi errori, blacklist più lunga
+            if PROXY_BLACKLIST[proxy_url]['error_count'] >= MAX_ERRORS_BEFORE_PERMANENT:
+                PROXY_BLACKLIST[proxy_url]['blacklisted_until'] = current_time + 3600  # 1 ora
+                app.logger.warning(f"Proxy {proxy_url} blacklistato permanentemente per {MAX_ERRORS_BEFORE_PERMANENT} errori {error_type}")
+            else:
+                PROXY_BLACKLIST[proxy_url]['blacklisted_until'] = current_time + BLACKLIST_DURATION
+            
+            PROXY_BLACKLIST[proxy_url]['error_type'] = error_type
+        
+        app.logger.info(f"Proxy {proxy_url} blacklistato fino a {datetime.fromtimestamp(PROXY_BLACKLIST[proxy_url]['blacklisted_until']).strftime('%H:%M:%S')} per {error_type} errori")
+        
+        # Log dettagliato per debug
+        app.logger.info(f"Blacklist proxy aggiornata: {len(PROXY_BLACKLIST)} proxy totali, {len(get_available_proxies())} disponibili")
+
+def is_proxy_blacklisted(proxy_url):
+    """Verifica se un proxy è in blacklist"""
+    global PROXY_BLACKLIST
+    
+    with PROXY_BLACKLIST_LOCK:
+        if proxy_url not in PROXY_BLACKLIST:
+            return False
+        
+        current_time = time.time()
+        blacklist_info = PROXY_BLACKLIST[proxy_url]
+        
+        # Se il periodo di blacklist è scaduto, rimuovi dalla blacklist
+        if current_time > blacklist_info['blacklisted_until']:
+            del PROXY_BLACKLIST[proxy_url]
+            app.logger.info(f"Proxy {proxy_url} rimosso dalla blacklist (scaduto)")
+            return False
+        
+        return True
+
+def get_available_proxies():
+    """Restituisce solo i proxy non blacklistati"""
+    available_proxies = []
+    
+    for proxy in PROXY_LIST:
+        if not is_proxy_blacklisted(proxy):
+            available_proxies.append(proxy)
+    
+    return available_proxies
+
+def cleanup_expired_blacklist():
+    """Pulisce la blacklist dai proxy scaduti"""
+    global PROXY_BLACKLIST
+    
+    with PROXY_BLACKLIST_LOCK:
+        current_time = time.time()
+        expired_proxies = []
+        
+        for proxy_url, blacklist_info in PROXY_BLACKLIST.items():
+            if current_time > blacklist_info['blacklisted_until']:
+                expired_proxies.append(proxy_url)
+        
+        for proxy_url in expired_proxies:
+            del PROXY_BLACKLIST[proxy_url]
+            app.logger.info(f"Proxy {proxy_url} rimosso dalla blacklist (scaduto)")
+    
+    return len(expired_proxies)
+
 # Sistema di broadcasting per statistiche real-time
 def broadcast_stats():
     """Invia statistiche in tempo reale a tutti i client connessi"""
@@ -256,7 +467,55 @@ def broadcast_stats():
             stats['daddy_base_url'] = get_daddylive_base_url()
             stats['session_count'] = len(SESSION_POOL)
             stats['proxy_count'] = len(PROXY_LIST)
+            
+            # Aggiungi statistiche proxy
+            available_proxies = get_available_proxies()
+            
+            # Calcola statistiche IP
+            ip_stats = {'IPv4': 0, 'IPv6': 0, 'hostname': 0}
+            for proxy in PROXY_LIST:
+                ip_version = get_proxy_ip_version(proxy)
+                if ip_version in ip_stats:
+                    ip_stats[ip_version] += 1
+            
+            available_ip_stats = {'IPv4': 0, 'IPv6': 0, 'hostname': 0}
+            for proxy in available_proxies:
+                ip_version = get_proxy_ip_version(proxy)
+                if ip_version in available_ip_stats:
+                    available_ip_stats[ip_version] += 1
+            
+            stats['proxy_status'] = {
+                'available_proxies': len(available_proxies),
+                'blacklisted_proxies': len(PROXY_BLACKLIST),
+                'total_proxies': len(PROXY_LIST),
+                'ip_statistics': {
+                    'total': ip_stats,
+                    'available': available_ip_stats
+                }
+            }
+            
             stats['timestamp'] = time.time()
+            
+            # Aggiungi statistiche client se disponibile
+            try:
+                if 'client_tracker' in globals():
+                    client_stats = client_tracker.get_realtime_stats()
+                    stats.update(client_stats)
+                else:
+                    # Fallback se client_tracker non è ancora disponibile
+                    stats['active_clients'] = 0
+                    stats['active_sessions'] = 0
+                    stats['total_requests'] = 0
+                    stats['m3u_clients'] = 0
+                    stats['m3u_requests'] = 0
+            except Exception as e:
+                app.logger.warning(f"Errore nel recupero statistiche client: {e}")
+                # Fallback con valori di default
+                stats['active_clients'] = 0
+                stats['active_sessions'] = 0
+                stats['total_requests'] = 0
+                stats['m3u_clients'] = 0
+                stats['m3u_requests'] = 0
             
             socketio.emit('stats_update', stats)
             time.sleep(2)  # Aggiorna ogni 2 secondi
@@ -267,15 +526,37 @@ def broadcast_stats():
 @socketio.on('connect')
 def handle_connect():
     """Gestisce nuove connessioni WebSocket"""
-    app.logger.info(f"Client connesso: {request.sid}")
+    app.logger.info("Client connesso")
     # Invia immediatamente le statistiche correnti
     stats = get_system_stats()
+    
+    # Aggiungi statistiche client se disponibile
+    try:
+        if 'client_tracker' in globals():
+            client_stats = client_tracker.get_realtime_stats()
+            stats.update(client_stats)
+        else:
+            # Fallback se client_tracker non è ancora disponibile
+            stats['active_clients'] = 0
+            stats['active_sessions'] = 0
+            stats['total_requests'] = 0
+            stats['m3u_clients'] = 0
+            stats['m3u_requests'] = 0
+    except Exception as e:
+        app.logger.warning(f"Errore nel recupero statistiche client per nuova connessione: {e}")
+        # Fallback con valori di default
+        stats['active_clients'] = 0
+        stats['active_sessions'] = 0
+        stats['total_requests'] = 0
+        stats['m3u_clients'] = 0
+        stats['m3u_requests'] = 0
+    
     emit('stats_update', stats)
 
 @socketio.on('disconnect')
 def handle_disconnect():
     """Gestisce disconnessioni WebSocket"""
-    app.logger.info(f"Client disconnesso: {request.sid}")
+    app.logger.info("Client disconnesso")
 
 # --- Configurazione Generale ---
 VERIFY_SSL = os.environ.get('VERIFY_SSL', 'false').lower() not in ('false', '0', 'no')
@@ -350,7 +631,13 @@ class ConfigManager:
             'ADMIN_USERNAME': 'admin',
             'ADMIN_PASSWORD': 'password123',
             'CACHE_ENABLED' : True,
-            'NO_PROXY_DOMAINS': 'github.com',
+            'NO_PROXY_DOMAINS': 'github.com,raw.githubusercontent.com',
+            'PREBUFFER_ENABLED': True,
+            'PREBUFFER_MAX_SEGMENTS': 3,
+            'PREBUFFER_MAX_SIZE_MB': 50,
+            'PREBUFFER_CLEANUP_INTERVAL': 300,
+            'PREBUFFER_MAX_MEMORY_PERCENT': 30.0,
+            'PREBUFFER_EMERGENCY_THRESHOLD': 90.0,
         }
         
     def load_config(self):
@@ -445,6 +732,302 @@ class ConfigManager:
 
 config_manager = ConfigManager()
 
+# --- Sistema di Pre-Buffering per Evitare Buffering ---
+class PreBufferManager:
+    def __init__(self):
+        self.pre_buffer = {}  # {stream_id: {segment_url: content}}
+        self.pre_buffer_lock = Lock()
+        self.pre_buffer_threads = {}  # {stream_id: thread}
+        self.last_cleanup_time = time.time()
+        self.update_config()
+    
+    def update_config(self):
+        """Aggiorna la configurazione dal config manager"""
+        try:
+            config = config_manager.load_config()
+            
+            # Assicurati che tutti i valori numerici siano convertiti correttamente
+            max_segments = config.get('PREBUFFER_MAX_SEGMENTS', 3)
+            if isinstance(max_segments, str):
+                max_segments = int(max_segments)
+            
+            max_size_mb = config.get('PREBUFFER_MAX_SIZE_MB', 50)
+            if isinstance(max_size_mb, str):
+                max_size_mb = int(max_size_mb)
+            
+            cleanup_interval = config.get('PREBUFFER_CLEANUP_INTERVAL', 300)
+            if isinstance(cleanup_interval, str):
+                cleanup_interval = int(cleanup_interval)
+            
+            max_memory_percent = config.get('PREBUFFER_MAX_MEMORY_PERCENT', 30)
+            if isinstance(max_memory_percent, str):
+                max_memory_percent = float(max_memory_percent)
+            
+            emergency_threshold = config.get('PREBUFFER_EMERGENCY_THRESHOLD', 90)
+            if isinstance(emergency_threshold, str):
+                emergency_threshold = float(emergency_threshold)
+            
+            self.pre_buffer_config = {
+                'enabled': config.get('PREBUFFER_ENABLED', True),
+                'max_segments': max_segments,
+                'max_buffer_size': max_size_mb * 1024 * 1024,  # Converti in bytes
+                'cleanup_interval': cleanup_interval,
+                'max_memory_percent': max_memory_percent,  # Max RAM percent
+                'emergency_cleanup_threshold': emergency_threshold  # Cleanup se RAM > threshold%
+            }
+            app.logger.info(f"Configurazione pre-buffer aggiornata: {self.pre_buffer_config}")
+        except Exception as e:
+            app.logger.error(f"Errore nell'aggiornamento configurazione pre-buffer: {e}")
+            # Configurazione di fallback
+            self.pre_buffer_config = {
+                'enabled': True,
+                'max_segments': 3,
+                'max_buffer_size': 50 * 1024 * 1024,
+                'cleanup_interval': 300,
+                'max_memory_percent': 30.0,
+                'emergency_cleanup_threshold': 90.0
+            }
+    
+    def check_memory_usage(self):
+        """Controlla l'uso di memoria e attiva cleanup se necessario"""
+        try:
+            memory = psutil.virtual_memory()
+            memory_percent = memory.percent
+            
+            # Calcola la dimensione totale del buffer
+            with self.pre_buffer_lock:
+                total_buffer_size = sum(
+                    sum(len(content) for content in segments.values())
+                    for segments in self.pre_buffer.values()
+                )
+                buffer_memory_percent = (total_buffer_size / memory.total) * 100
+            
+            app.logger.info(f"Memoria sistema: {memory_percent:.1f}%, Buffer: {buffer_memory_percent:.1f}%")
+            
+            # Cleanup di emergenza se la RAM supera la soglia
+            emergency_threshold = self.pre_buffer_config['emergency_cleanup_threshold']
+            app.logger.debug(f"Controllo memoria: {memory_percent:.1f}% vs soglia {emergency_threshold}")
+            if memory_percent > emergency_threshold:
+                app.logger.warning(f"RAM critica ({memory_percent:.1f}%), pulizia di emergenza del buffer")
+                self.emergency_cleanup()
+                return False
+            
+            # Cleanup se il buffer usa troppa memoria
+            max_memory_percent = self.pre_buffer_config['max_memory_percent']
+            app.logger.debug(f"Controllo buffer: {buffer_memory_percent:.1f}% vs limite {max_memory_percent}")
+            if buffer_memory_percent > max_memory_percent:
+                app.logger.warning(f"Buffer troppo grande ({buffer_memory_percent:.1f}%), pulizia automatica")
+                self.cleanup_oldest_streams()
+                return False
+            
+            return True
+            
+        except Exception as e:
+            app.logger.error(f"Errore nel controllo memoria: {e}")
+            return True
+    
+    def emergency_cleanup(self):
+        """Pulizia di emergenza - rimuove tutti i buffer"""
+        with self.pre_buffer_lock:
+            streams_cleared = len(self.pre_buffer)
+            total_size = sum(
+                sum(len(content) for content in segments.values())
+                for segments in self.pre_buffer.values()
+            )
+            self.pre_buffer.clear()
+            self.pre_buffer_threads.clear()
+        
+        app.logger.warning(f"Pulizia di emergenza completata: {streams_cleared} stream, {total_size / (1024*1024):.1f}MB liberati")
+    
+    def cleanup_oldest_streams(self):
+        """Rimuove gli stream più vecchi per liberare memoria"""
+        with self.pre_buffer_lock:
+            if len(self.pre_buffer) <= 1:
+                return
+            
+            # Calcola la dimensione di ogni stream
+            stream_sizes = {}
+            for stream_id, segments in self.pre_buffer.items():
+                stream_size = sum(len(content) for content in segments.values())
+                stream_sizes[stream_id] = stream_size
+            
+            # Rimuovi gli stream più grandi fino a liberare abbastanza memoria
+            target_reduction = self.pre_buffer_config['max_buffer_size'] * 0.5  # Riduci del 50%
+            current_total = sum(stream_sizes.values())
+            
+            if current_total <= target_reduction:
+                return
+            
+            # Ordina per dimensione (più grandi prima)
+            sorted_streams = sorted(stream_sizes.items(), key=lambda x: x[1], reverse=True)
+            
+            freed_memory = 0
+            streams_to_remove = []
+            
+            for stream_id, size in sorted_streams:
+                if freed_memory >= target_reduction:
+                    break
+                streams_to_remove.append(stream_id)
+                freed_memory += size
+            
+            # Rimuovi gli stream selezionati
+            for stream_id in streams_to_remove:
+                if stream_id in self.pre_buffer:
+                    del self.pre_buffer[stream_id]
+                if stream_id in self.pre_buffer_threads:
+                    del self.pre_buffer_threads[stream_id]
+            
+            app.logger.info(f"Pulizia automatica: {len(streams_to_remove)} stream rimossi, {freed_memory / (1024*1024):.1f}MB liberati")
+    
+    def get_stream_id_from_url(self, url):
+        """Estrae un ID stream univoco dall'URL"""
+        # Usa l'hash dell'URL come stream ID
+        return hashlib.md5(url.encode()).hexdigest()[:12]
+    
+    def pre_buffer_segments(self, m3u8_content, base_url, headers, stream_id):
+        """Pre-scarica i segmenti successivi in background"""
+        # Controlla se il pre-buffering è abilitato
+        if not self.pre_buffer_config.get('enabled', True):
+            app.logger.info(f"Pre-buffering disabilitato per stream {stream_id}")
+            return
+        
+        # Controlla l'uso di memoria prima di iniziare
+        if not self.check_memory_usage():
+            app.logger.warning(f"Memoria insufficiente, pre-buffering saltato per stream {stream_id}")
+            return
+        
+        try:
+            # Trova i segmenti nel M3U8
+            segment_urls = []
+            for line in m3u8_content.splitlines():
+                line = line.strip()
+                if line and not line.startswith('#'):
+                    segment_url = urljoin(base_url, line)
+                    segment_urls.append(segment_url)
+            
+            if not segment_urls:
+                return
+            
+            # Pre-scarica i primi N segmenti
+            max_segments = self.pre_buffer_config['max_segments']
+            app.logger.info(f"Pre-buffering per stream {stream_id}: {len(segment_urls)} segmenti disponibili, max_segments={max_segments}")
+            segments_to_buffer = segment_urls[:max_segments]
+            
+            def buffer_worker():
+                try:
+                    current_buffer_size = 0
+                    
+                    for segment_url in segments_to_buffer:
+                        # Controlla memoria prima di ogni segmento
+                        if not self.check_memory_usage():
+                            app.logger.warning(f"Memoria insufficiente durante pre-buffering, interrotto per stream {stream_id}")
+                            break
+                        
+                        # Controlla se il segmento è già nel buffer
+                        with self.pre_buffer_lock:
+                            if stream_id in self.pre_buffer and segment_url in self.pre_buffer[stream_id]:
+                                continue
+                        
+                        try:
+                            # Scarica il segmento
+                            # Note: These functions are defined later in the file
+                            # They will be available when the class is actually used
+                            proxy_config = globals().get('get_proxy_for_url', lambda x: None)(segment_url)
+                            proxy_key = proxy_config['http'] if proxy_config else None
+                            
+                            response = globals().get('make_persistent_request', lambda *args, **kwargs: None)(
+                                segment_url,
+                                headers=headers,
+                                timeout=globals().get('get_dynamic_timeout', lambda x, y=30: y)(segment_url),
+                                proxy_url=proxy_key,
+                                allow_redirects=True
+                            )
+                            response.raise_for_status()
+                            
+                            segment_content = response.content
+                            segment_size = len(segment_content)
+                            
+                            # Controlla se il buffer non supera il limite
+                            if current_buffer_size + segment_size > self.pre_buffer_config['max_buffer_size']:
+                                app.logger.warning(f"Buffer pieno per stream {stream_id}, salto segmento {segment_url}")
+                                break
+                            
+                            # Aggiungi al buffer
+                            with self.pre_buffer_lock:
+                                if stream_id not in self.pre_buffer:
+                                    self.pre_buffer[stream_id] = {}
+                                self.pre_buffer[stream_id][segment_url] = segment_content
+                                current_buffer_size += segment_size
+                            
+                            app.logger.info(f"Segmento pre-buffato: {segment_url} ({segment_size} bytes) per stream {stream_id}")
+                            
+                        except Exception as e:
+                            app.logger.error(f"Errore nel pre-buffering del segmento {segment_url}: {e}")
+                            continue
+                    
+                    app.logger.info(f"Pre-buffering completato per stream {stream_id}: {len(segments_to_buffer)} segmenti")
+                    
+                except Exception as e:
+                    app.logger.error(f"Errore nel worker di pre-buffering per stream {stream_id}: {e}")
+                finally:
+                    # Rimuovi il thread dalla lista
+                    with self.pre_buffer_lock:
+                        if stream_id in self.pre_buffer_threads:
+                            del self.pre_buffer_threads[stream_id]
+            
+            # Avvia il thread di pre-buffering
+            buffer_thread = Thread(target=buffer_worker, daemon=True)
+            buffer_thread.start()
+            
+            with self.pre_buffer_lock:
+                self.pre_buffer_threads[stream_id] = buffer_thread
+            
+        except Exception as e:
+            app.logger.error(f"Errore nell'avvio del pre-buffering per stream {stream_id}: {e}")
+    
+    def get_buffered_segment(self, segment_url, stream_id):
+        """Recupera un segmento dal buffer se disponibile"""
+        with self.pre_buffer_lock:
+            if stream_id in self.pre_buffer and segment_url in self.pre_buffer[stream_id]:
+                content = self.pre_buffer[stream_id][segment_url]
+                # Rimuovi dal buffer dopo l'uso
+                del self.pre_buffer[stream_id][segment_url]
+                app.logger.info(f"Segmento servito dal buffer: {segment_url} per stream {stream_id}")
+                return content
+        return None
+    
+    def cleanup_old_buffers(self):
+        """Pulisce i buffer vecchi"""
+        while True:
+            try:
+                time.sleep(self.pre_buffer_config['cleanup_interval'])
+                
+                # Controlla memoria e pulisci se necessario
+                self.check_memory_usage()
+                
+                with self.pre_buffer_lock:
+                    current_time = time.time()
+                    streams_to_remove = []
+                    
+                    for stream_id, segments in self.pre_buffer.items():
+                        # Rimuovi stream senza thread attivo e con buffer vecchio
+                        if stream_id not in self.pre_buffer_threads:
+                            streams_to_remove.append(stream_id)
+                    
+                    for stream_id in streams_to_remove:
+                        del self.pre_buffer[stream_id]
+                        app.logger.info(f"Buffer pulito per stream {stream_id}")
+                
+            except Exception as e:
+                app.logger.error(f"Errore nella pulizia del buffer: {e}")
+
+# Istanza globale del pre-buffer manager
+pre_buffer_manager = PreBufferManager()
+
+# Avvia il thread di pulizia del buffer
+cleanup_thread = Thread(target=pre_buffer_manager.cleanup_old_buffers, daemon=True)
+cleanup_thread.start()
+
 # --- Log Manager ---
 class LogManager:
     def __init__(self):
@@ -513,41 +1096,16 @@ class LogManager:
 log_manager = LogManager()
 
 # --- Variabili globali per monitoraggio sistema ---
-system_stats = {
-    'ram_usage': 0,
-    'ram_used_gb': 0,
-    'ram_total_gb': 0,
-    'network_sent': 0,
-    'network_recv': 0,
-    'bandwidth_usage': 0
-}
+system_stats = {}
 
 # Inizializza cache globali (verranno sovrascritte da setup_all_caches)
 M3U8_CACHE = {}
 TS_CACHE = {}
 KEY_CACHE = {}
-MPD_CACHE = {}
 
 # Pool globale di sessioni per connessioni persistenti
 SESSION_POOL = {}
 SESSION_LOCK = Lock()
-
-def get_system_stats():
-    """Ottiene le statistiche di sistema in tempo reale"""
-    global system_stats
-    
-    # Memoria RAM
-    memory = psutil.virtual_memory()
-    system_stats['ram_usage'] = memory.percent
-    system_stats['ram_used_gb'] = memory.used / (1024**3)  # GB
-    system_stats['ram_total_gb'] = memory.total / (1024**3)  # GB
-    
-    # Utilizzo di rete
-    net_io = psutil.net_io_counters()
-    system_stats['network_sent'] = net_io.bytes_sent / (1024**2)  # MB
-    system_stats['network_recv'] = net_io.bytes_recv / (1024**2)  # MB
-    
-    return system_stats
 
 def monitor_bandwidth():
     """Monitora la banda di rete in background"""
@@ -619,6 +1177,9 @@ def setup_proxies():
     """Carica la lista di proxy SOCKS5, HTTP e HTTPS dalle variabili d'ambiente."""
     global PROXY_LIST
     proxies_found = []
+    ipv4_count = 0
+    ipv6_count = 0
+    hostname_count = 0
 
     socks_proxy_list_str = os.environ.get('SOCKS5_PROXY')
     if socks_proxy_list_str:
@@ -632,6 +1193,17 @@ def setup_proxies():
                     app.logger.info(f"Proxy SOCKS5 convertito per garantire la risoluzione DNS remota")
                 elif not proxy.startswith('socks5h://'):
                     app.logger.warning(f"ATTENZIONE: L'URL del proxy SOCKS5 non è un formato SOCKS5 valido (es. socks5:// o socks5h://). Potrebbe non funzionare.")
+                
+                # Analizza il tipo di IP
+                ip_version = get_proxy_ip_version(final_proxy_url)
+                if ip_version == "IPv6":
+                    ipv6_count += 1
+                    app.logger.info(f"Proxy IPv6 rilevato: {final_proxy_url}")
+                elif ip_version == "IPv4":
+                    ipv4_count += 1
+                else:
+                    hostname_count += 1
+                
                 proxies_found.append(final_proxy_url)
             app.logger.info("Assicurati di aver installato la dipendenza per SOCKS: 'pip install PySocks'")
 
@@ -640,6 +1212,15 @@ def setup_proxies():
         http_proxies = [p.strip() for p in http_proxy_list_str.split(',') if p.strip()]
         if http_proxies:
             app.logger.info(f"Trovati {len(http_proxies)} proxy HTTP. Verranno usati a rotazione.")
+            for proxy in http_proxies:
+                ip_version = get_proxy_ip_version(proxy)
+                if ip_version == "IPv6":
+                    ipv6_count += 1
+                    app.logger.info(f"Proxy IPv6 rilevato: {proxy}")
+                elif ip_version == "IPv4":
+                    ipv4_count += 1
+                else:
+                    hostname_count += 1
             proxies_found.extend(http_proxies)
 
     https_proxy_list_str = os.environ.get('HTTPS_PROXY')
@@ -647,28 +1228,45 @@ def setup_proxies():
         https_proxies = [p.strip() for p in https_proxy_list_str.split(',') if p.strip()]
         if https_proxies:
             app.logger.info(f"Trovati {len(https_proxies)} proxy HTTPS. Verranno usati a rotazione.")
+            for proxy in https_proxies:
+                ip_version = get_proxy_ip_version(proxy)
+                if ip_version == "IPv6":
+                    ipv6_count += 1
+                    app.logger.info(f"Proxy IPv6 rilevato: {proxy}")
+                elif ip_version == "IPv4":
+                    ipv4_count += 1
+                else:
+                    hostname_count += 1
             proxies_found.extend(https_proxies)
 
     PROXY_LIST = proxies_found
 
     if PROXY_LIST:
-        app.logger.info(f"Totale di {len(PROXY_LIST)} proxy configurati. Verranno usati a rotazione per ogni richiesta.")
+        app.logger.info(f"Totale di {len(PROXY_LIST)} proxy configurati:")
+        app.logger.info(f"  - IPv4: {ipv4_count}")
+        app.logger.info(f"  - IPv6: {ipv6_count}")
+        app.logger.info(f"  - Hostname: {hostname_count}")
+        app.logger.info("Verranno usati a rotazione per ogni richiesta.")
     else:
         app.logger.info("Nessun proxy (SOCKS5, HTTP, HTTPS) configurato.")
 
-def get_proxy_for_url(url):
-    config = config_manager.load_config()
-    no_proxy_domains = [d.strip() for d in config.get('NO_PROXY_DOMAINS', '').split(',') if d.strip()]
+
+
+def get_proxy_with_fallback(url, max_retries=3):
+    """Ottiene un proxy con fallback automatico in caso di errore"""
     if not PROXY_LIST:
         return None
-    try:
-        parsed_url = urlparse(url)
-        if any(domain in parsed_url.netloc for domain in no_proxy_domains):
-            return None
-    except Exception:
-        pass
-    chosen_proxy = random.choice(PROXY_LIST)
-    return {'http': chosen_proxy, 'https': chosen_proxy}
+    
+    # Prova diversi proxy in caso di errore
+    for attempt in range(max_retries):
+        try:
+            proxy_config = get_proxy_for_url(url)
+            if proxy_config:
+                return proxy_config
+        except Exception:
+            continue
+    
+    return None
 
 def create_robust_session():
     """Crea una sessione con configurazione robusta e keep-alive per connessioni persistenti."""
@@ -743,6 +1341,18 @@ def make_persistent_request(url, headers=None, timeout=None, proxy_url=None, **k
             **kwargs
         )
         return response
+    except requests.exceptions.ProxyError as e:
+        # Gestione specifica per errori proxy (incluso 429)
+        error_str = str(e).lower()
+        if ("429" in error_str or "too many requests" in error_str) and proxy_url:
+            app.logger.warning(f"Proxy {proxy_url} ha restituito errore 429, aggiungendo alla blacklist")
+            add_proxy_to_blacklist(proxy_url, "429")
+        app.logger.error(f"Errore proxy nella richiesta persistente: {e}")
+        # In caso di errore, rimuovi la sessione dal pool
+        with SESSION_LOCK:
+            if proxy_url in SESSION_POOL:
+                del SESSION_POOL[proxy_url]
+        raise
     except Exception as e:
         app.logger.error(f"Errore nella richiesta persistente: {e}")
         # In caso di errore, rimuovi la sessione dal pool
@@ -767,41 +1377,6 @@ setup_all_caches()
 DADDYLIVE_BASE_URL = None
 LAST_FETCH_TIME = 0
 FETCH_INTERVAL = 3600
-
-def get_daddylive_base_url():
-    """Fetches and caches the dynamic base URL for DaddyLive."""
-    global DADDYLIVE_BASE_URL, LAST_FETCH_TIME
-    current_time = time.time()
-    
-    if DADDYLIVE_BASE_URL and (current_time - LAST_FETCH_TIME < FETCH_INTERVAL):
-        return DADDYLIVE_BASE_URL
-
-    try:
-        app.logger.info("Fetching dynamic DaddyLive base URL from GitHub...")
-        github_url = 'https://raw.githubusercontent.com/thecrewwh/dl_url/refs/heads/main/dl.xml'
-        response = requests.get(
-            github_url,
-            timeout=REQUEST_TIMEOUT,
-            proxies=get_proxy_for_url(github_url),
-            verify=VERIFY_SSL
-        )
-        response.raise_for_status()
-        content = response.text
-        match = re.search(r'src\s*=\s*"([^"]*)"', content)
-        if match:
-            base_url = match.group(1)
-            if not base_url.endswith('/'):
-                base_url += '/'
-            DADDYLIVE_BASE_URL = base_url
-            LAST_FETCH_TIME = current_time
-            app.logger.info(f"Dynamic DaddyLive base URL updated to: {DADDYLIVE_BASE_URL}")
-            return DADDYLIVE_BASE_URL
-    except requests.RequestException as e:
-        app.logger.error(f"Error fetching dynamic DaddyLive URL: {e}. Using fallback.")
-    
-    DADDYLIVE_BASE_URL = "https://daddylive.sx/"
-    app.logger.info(f"Using fallback DaddyLive URL: {DADDYLIVE_BASE_URL}")
-    return DADDYLIVE_BASE_URL
 
 get_daddylive_base_url()
 
@@ -957,10 +1532,14 @@ def resolve_m3u8_link(url, headers=None):
     try:
         app.logger.info("Ottengo URL base dinamico...")
         github_url = 'https://raw.githubusercontent.com/thecrewwh/dl_url/refs/heads/main/dl.xml'
-        main_url_req = requests.get(
+        
+        # Crea una sessione che ignora le variabili d'ambiente per forzare connessione diretta
+        session = requests.Session()
+        session.trust_env = False  # Ignora HTTP_PROXY, HTTPS_PROXY environment variables
+        
+        main_url_req = session.get(
             github_url,
             timeout=REQUEST_TIMEOUT,
-            proxies=get_proxy_for_url(github_url),
             verify=VERIFY_SSL
         )
         main_url_req.raise_for_status()
@@ -982,7 +1561,8 @@ def resolve_m3u8_link(url, headers=None):
         final_headers_for_resolving['Origin'] = baseurl
 
         app.logger.info(f"Passo 1: Richiesta a {stream_url}")
-        response = requests.get(stream_url, headers=final_headers_for_resolving, timeout=REQUEST_TIMEOUT, proxies=get_proxy_for_url(stream_url), verify=VERIFY_SSL)
+        proxy_config = get_proxy_for_url(stream_url)
+        response = safe_http_request(stream_url, headers=final_headers_for_resolving, timeout=REQUEST_TIMEOUT, proxies=proxy_config)
         response.raise_for_status()
 
         iframes = re.findall(r'<a[^>]*href="([^"]+)"[^>]*>\s*<button[^>]*>\s*Player\s*2\s*</button>', response.text)
@@ -1000,7 +1580,8 @@ def resolve_m3u8_link(url, headers=None):
         final_headers_for_resolving['Origin'] = url2
 
         app.logger.info(f"Passo 3: Richiesta a Player 2: {url2}")
-        response = requests.get(url2, headers=final_headers_for_resolving, timeout=REQUEST_TIMEOUT, proxies=get_proxy_for_url(url2), verify=VERIFY_SSL)
+        proxy_config = get_proxy_for_url(url2)
+        response = safe_http_request(url2, headers=final_headers_for_resolving, timeout=REQUEST_TIMEOUT, proxies=proxy_config)
         response.raise_for_status()
 
         iframes = re.findall(r'iframe src="([^"]*)', response.text)
@@ -1012,7 +1593,8 @@ def resolve_m3u8_link(url, headers=None):
         app.logger.info(f"Passo 4: Trovato iframe: {iframe_url}")
 
         app.logger.info(f"Passo 5: Richiesta iframe: {iframe_url}")
-        response = requests.get(iframe_url, headers=final_headers_for_resolving, timeout=REQUEST_TIMEOUT, proxies=get_proxy_for_url(iframe_url), verify=VERIFY_SSL)
+        proxy_config = get_proxy_for_url(iframe_url)
+        response = safe_http_request(iframe_url, headers=final_headers_for_resolving, timeout=REQUEST_TIMEOUT, proxies=proxy_config)
         response.raise_for_status()
 
         iframe_content = response.text
@@ -1038,7 +1620,8 @@ def resolve_m3u8_link(url, headers=None):
 
         auth_url = f'{auth_host}{auth_php}?channel_id={channel_key}&ts={auth_ts}&rnd={auth_rnd}&sig={auth_sig}'
         app.logger.info(f"Passo 6: Autenticazione: {auth_url}")
-        auth_response = requests.get(auth_url, headers=final_headers_for_resolving, timeout=REQUEST_TIMEOUT, proxies=get_proxy_for_url(auth_url), verify=VERIFY_SSL)
+        proxy_config = get_proxy_for_url(auth_url)
+        auth_response = safe_http_request(auth_url, headers=final_headers_for_resolving, timeout=REQUEST_TIMEOUT, proxies=proxy_config)
         auth_response.raise_for_status()
 
         host = re.findall('(?s)m3u8 =.*?:.*?:.*?".*?".*?"([^"]*)', iframe_content)[0]
@@ -1046,7 +1629,8 @@ def resolve_m3u8_link(url, headers=None):
         server_lookup_url = f"https://{urlparse(iframe_url).netloc}{server_lookup}{channel_key}"
         app.logger.info(f"Passo 7: Server lookup: {server_lookup_url}")
 
-        lookup_response = requests.get(server_lookup_url, headers=final_headers_for_resolving, timeout=REQUEST_TIMEOUT, proxies=get_proxy_for_url(server_lookup_url), verify=VERIFY_SSL)
+        proxy_config = get_proxy_for_url(server_lookup_url)
+        lookup_response = safe_http_request(server_lookup_url, headers=final_headers_for_resolving, timeout=REQUEST_TIMEOUT, proxies=proxy_config)
         lookup_response.raise_for_status()
         server_data = lookup_response.json()
         server_key = server_data['server_key']
@@ -1076,112 +1660,7 @@ def resolve_m3u8_link(url, headers=None):
 stats_thread = threading.Thread(target=broadcast_stats, daemon=True)
 stats_thread.start()
 
-# Cache per manifest MPD
-MPD_CACHE = TTLCache(maxsize=100, ttl=30)
 
-def parse_duration(duration_str):
-    """Converte durata ISO 8601 in secondi"""
-    if not duration_str or not duration_str.startswith('PT'):
-        return 0
-    
-    # Rimuovi PT e converti
-    duration_str = duration_str[2:]
-    
-    # Pattern per ore, minuti, secondi
-    pattern = r'(?:(\d+)H)?(?:(\d+)M)?(?:(\d+(?:\.\d+)?)S)?'
-    match = re.match(pattern, duration_str)
-    
-    if not match:
-        return 0
-    
-    hours = int(match.group(1) or 0)
-    minutes = int(match.group(2) or 0)
-    seconds = float(match.group(3) or 0)
-    
-    return hours * 3600 + minutes * 60 + seconds
-
-def get_segment_timeline(adaptation_set, representation):
-    """Estrae la timeline dei segmenti da un representation"""
-    segments = []
-    
-    # Trova SegmentTemplate o SegmentList
-    segment_template = representation.find('.//SegmentTemplate')
-    if segment_template is None:
-        segment_template = adaptation_set.find('.//SegmentTemplate')
-    
-    if segment_template is not None:
-        # Gestione SegmentTemplate con SegmentTimeline
-        timeline = segment_template.find('.//SegmentTimeline')
-        if timeline is not None:
-            timescale = int(segment_template.get('timescale', 1))
-            media_template = segment_template.get('media', '')
-            
-            current_time = 0
-            segment_number = int(segment_template.get('startNumber', 1))
-            
-            for s_elem in timeline.findall('.//S'):
-                t = s_elem.get('t')
-                if t is not None:
-                    current_time = int(t)
-                
-                d = int(s_elem.get('d'))
-                r = int(s_elem.get('r', 0))
-                
-                # Genera segmenti per questo elemento S
-                for i in range(r + 1):
-                    segment_url = media_template.replace('$Number$', str(segment_number))
-                    segment_url = segment_url.replace('$Time$', str(current_time))
-                    
-                    segments.append({
-                        'url': segment_url,
-                        'duration': d / timescale,
-                        'number': segment_number,
-                        'time': current_time
-                    })
-                    
-                    current_time += d
-                    segment_number += 1
-        else:
-            # SegmentTemplate senza timeline - usa duration
-            duration = int(segment_template.get('duration', 0))
-            timescale = int(segment_template.get('timescale', 1))
-            start_number = int(segment_template.get('startNumber', 1))
-            media_template = segment_template.get('media', '')
-            
-            # Calcola numero di segmenti basato sulla durata del periodo
-            period_duration = 3600  # Default 1 ora se non specificato
-            segment_duration = duration / timescale
-            num_segments = int(period_duration / segment_duration)
-            
-            for i in range(num_segments):
-                segment_number = start_number + i
-                segment_url = media_template.replace('$Number$', str(segment_number))
-                
-                segments.append({
-                    'url': segment_url,
-                    'duration': segment_duration,
-                    'number': segment_number,
-                    'time': i * duration
-                })
-    
-    return segments
-    
-def get_mpd_cache_ttl(mpd_content):
-    """Determina TTL appropriato basato sul tipo di contenuto"""
-    if 'type="dynamic"' in mpd_content or 'type="live"' in mpd_content:
-        return 5  # Live: cache molto breve
-    elif 'minimumUpdatePeriod' in mpd_content:
-        return 10  # Semi-live
-    else:
-        return 60  # VOD: cache più lunga
-
-# Modifica la cache MPD per essere dinamica
-def setup_dynamic_mpd_cache():
-    """Configura cache MPD dinamica"""
-    global MPD_CACHE
-    MPD_CACHE = {}  # Usa dict normale per TTL dinamico
-
-setup_dynamic_mpd_cache()
 
 @app.route('/admin/cache/toggle', methods=['POST'])
 @login_required
@@ -1241,332 +1720,22 @@ def debug_env():
     
     return jsonify(env_vars)
 
-@app.route('/proxy/mpd')
-def proxy_mpd():
-    """Proxy per file MPD MPEG-DASH con supporto proxy e caching dinamico"""
-    mpd_url = request.args.get('url', '').strip()
-    if not mpd_url:
-        return "Errore: Parametro 'url' mancante", 400
-
-    # Cache key
-    cache_key = f"mpd_{mpd_url}"
-    
-    # Carica configurazione cache
-    config = config_manager.load_config()
-    cache_enabled = config.get('CACHE_ENABLED', True)
-    
-    if cache_enabled and cache_key in MPD_CACHE:
-        cached_data, cache_time, ttl = MPD_CACHE[cache_key]
-        if time.time() - cache_time < ttl:
-            app.logger.info(f"Cache HIT per MPD: {mpd_url}")
-            return Response(cached_data, content_type="application/dash+xml")
-        else:
-            del MPD_CACHE[cache_key]
-    
-    # Headers personalizzati
-    headers = {
-        unquote(key[2:]).replace("_", "-"): unquote(value).strip()
-        for key, value in request.args.items()
-        if key.lower().startswith("h_")
-    }
-
-    try:
-        proxy_config = get_proxy_for_url(mpd_url)
-        proxy_key = proxy_config['http'] if proxy_config else None
-        
-        response = make_persistent_request(
-            mpd_url,
-            headers=headers,
-            timeout=REQUEST_TIMEOUT,
-            proxy_url=proxy_key,
-            allow_redirects=True
-        )
-        response.raise_for_status()
-        
-        mpd_content = response.text
-        final_url = response.url
-        
-        # Modifica URLs nel manifest MPD
-        modified_mpd = modify_mpd_urls(mpd_content, final_url, headers)
-        
-        # Cache dinamico basato sul tipo
-        # Cache dinamico basato sul tipo
-        if cache_enabled:
-            ttl = get_mpd_cache_ttl(mpd_content)
-            MPD_CACHE[cache_key] = (modified_mpd, time.time(), ttl)
-            # Sposta il logger all'interno del blocco if, in modo che venga chiamato
-            # solo quando il file è stato effettivamente cachato.
-            app.logger.info(f"MPD cachato con TTL {ttl}s: {mpd_url}")
-        else:
-            # Aggiungi un log per quando la cache è disabilitata per maggiore chiarezza
-            app.logger.info(f"MPD servito senza cache: {mpd_url}")
-        
-        return Response(modified_mpd, content_type="application/dash+xml")
-        
-    except requests.RequestException as e:
-        app.logger.error(f"Errore durante il download del file MPD: {str(e)}")
-        return f"Errore durante il download del file MPD: {str(e)}", 500
-
-@app.route('/test/mpd-debug')
-@login_required
-def test_mpd_debug():
-    """Test e debug specifico per MPD"""
-    test_url = request.args.get('url', 'https://dash.akamaized.net/akamai/bbb_30fps/bbb_30fps.mpd')
-    
-    try:
-        # Test diretto
-        response = requests.get(test_url, timeout=10)
-        if response.status_code != 200:
-            return jsonify({"error": f"Status code: {response.status_code}"})
-        
-        # Analizza MPD
-        root = ET.fromstring(response.text)
-        ns = {'dash': 'urn:mpeg:dash:schema:mpd:2011'}
-        
-        info = {
-            "url": test_url,
-            "status": "OK",
-            "type": root.get('type', 'static'),
-            "periods": len(root.findall('.//dash:Period', ns)),
-            "adaptation_sets": len(root.findall('.//dash:AdaptationSet', ns)),
-            "representations": len(root.findall('.//dash:Representation', ns)),
-            "segment_templates": len(root.findall('.//dash:SegmentTemplate', ns)),
-            "base_urls": [elem.text for elem in root.findall('.//dash:BaseURL', ns)],
-            "proxy_url": f"/proxy/mpd?url={quote(test_url)}"
-        }
-        
-        return jsonify(info)
-        
-    except Exception as e:
-        return jsonify({"error": str(e), "traceback": traceback.format_exc()})
 
 
-def modify_mpd_urls(mpd_content, base_url, headers):
-    """Modifica gli URL nel manifest MPD per passare attraverso il proxy"""
-    try:
-        app.logger.info(f"Modificando MPD per base URL: {base_url}")
-        
-        # Parse XML con gestione errori migliorata
-        root = ET.fromstring(mpd_content)
-        app.logger.info("XML parsing completato con successo")
-        
-        # Namespace DASH
-        ns = {'dash': 'urn:mpeg:dash:schema:mpd:2011'}
-        
-        # MIGLIORAMENTO: Calcolo base URL più robusto
-        parsed_base = urlparse(base_url)
-        
-        # Controlla se c'è BaseURL nel MPD
-        base_url_elements = root.findall('.//dash:BaseURL', ns)
-        if base_url_elements and base_url_elements[0].text:
-            mpd_base = base_url_elements[0].text
-            if mpd_base.startswith('http'):
-                base_path = mpd_base
-            else:
-                base_path = urljoin(base_url, mpd_base)
-        else:
-            base_path = f"{parsed_base.scheme}://{parsed_base.netloc}{parsed_base.path.rsplit('/', 1)[0]}/"
-        
-        # Headers query string
-        headers_query = "&".join([f"h_{quote(k)}={quote(v)}" for k, v in headers.items()])
-        
-        app.logger.info(f"Base path calcolato: {base_path}")
-        
-        # NUOVA: Gestione Period dinamici per live
-        periods = root.findall('.//dash:Period', ns)
-        for period in periods:
-            period_start = period.get('start', 'PT0S')
-            app.logger.info(f"Processando Period con start: {period_start}")
-        
-        # Modifica SegmentTemplate media URLs con parametri aggiuntivi
-        template_count = 0
-        for segment_template in root.findall('.//dash:SegmentTemplate', ns):
-            media = segment_template.get('media')
-            if media:
-                timescale = segment_template.get('timescale', '1')
-                # Verifica se c'è SegmentTimeline
-                has_timeline = segment_template.find('.//dash:SegmentTimeline', ns) is not None
-                if has_timeline:
-                    duration_param = ''
-                else:
-                    duration = segment_template.get('duration', '0')
-                    duration_param = f"&duration={duration}"
-                start_number = segment_template.get('startNumber', '1')
-        
-                new_media = (
-                    f"/proxy/dash-segment?template={quote(media)}"
-                    f"&base={quote(base_path)}"
-                    f"&timescale={timescale}"
-                    f"{duration_param}"
-                    f"&startNumber={start_number}"
-                    f"&{headers_query}"
-                )
-                segment_template.set('media', new_media)
-                app.logger.info(f"SegmentTemplate media modificato: {media} -> {new_media}")
-        
-            initialization = segment_template.get('initialization')
-            if initialization:
-                init_url = urljoin(base_path, initialization)
-                new_init = f"/proxy/dash-segment?url={quote(init_url)}&{headers_query}"
-                segment_template.set('initialization', new_init)
-        
-        app.logger.info(f"Modifiche completate: {template_count} SegmentTemplate")
-        
-        # Converti back to string
-        modified_content = ET.tostring(root, encoding='unicode', method='xml')
-        
-        # AGGIUNTA: Validazione del risultato
-        if not modified_content or len(modified_content) < 100:
-            app.logger.error("MPD modificato sembra troppo corto, possibile errore")
-            return mpd_content
-        
-        app.logger.info("MPD modificato con successo")
-        return modified_content
-        
-    except Exception as e:
-        app.logger.error(f"Errore nella modifica MPD: {e}")
-        app.logger.error(f"Traceback: {traceback.format_exc()}")
-        return mpd_content
 
-@app.route('/proxy/dash-segment')
-def proxy_dash_segment():
-    """Proxy per segmenti DASH con supporto template migliorato e caching"""
-    segment_url = request.args.get('url', '').strip()
-    template = request.args.get('template', '').strip()
-    base = request.args.get('base', '').strip()
 
-    if not segment_url and not (template and base):
-        return "Errore: Parametri mancanti (serve 'url' oppure 'template' e 'base')", 400
 
-    try:
-        if template and base:
-            # Decodifica i parametri
-            number = request.args.get('Number', request.args.get('number', '1'))
-            time = request.args.get('Time', request.args.get('time', '0'))
-            bandwidth = request.args.get('Bandwidth', request.args.get('bandwidth', '1000000'))
-            representation_id = request.args.get('RepresentationID', request.args.get('representation_id', 'video'))
-
-            # Sostituzione placeholder
-            segment_url = template
-            segment_url = segment_url.replace('$Number$', str(number))
-            segment_url = segment_url.replace('$Time$', str(time))
-            segment_url = segment_url.replace('$Bandwidth$', str(bandwidth))
-            segment_url = segment_url.replace('$RepresentationID$', str(representation_id))
-            segment_url = segment_url.replace('$$', '$')
-            segment_url = urljoin(base, segment_url)
-        elif segment_url:
-            pass  # già pronto
-        else:
-            return "Errore: Parametri mancanti", 400
-
-        # Scarica il segmento dal CDN
-        proxy_config = get_proxy_for_url(segment_url)
-        proxy_key = proxy_config['http'] if proxy_config else None
-        response = make_persistent_request(
-            segment_url,
-            timeout=REQUEST_TIMEOUT,
-            proxy_url=proxy_key,
-            allow_redirects=True
-        )
-        response.raise_for_status()
-        return Response(response.content, content_type=response.headers.get('Content-Type', 'application/octet-stream'))
-
-    except Exception as e:
-        app.logger.error(f"Errore proxy DASH segment: {e}")
-        app.logger.error(traceback.format_exc())
-        return f"Errore proxy DASH segment: {str(e)}", 502
-
-@app.route('/proxy/dash-master')
-def proxy_dash_master():
-    """Crea un master manifest DASH simile al metodo M3U8"""
-    stream_id = request.args.get('stream', '').strip()
-    if not stream_id:
-        return "Errore: Parametro 'stream' mancante", 400
-
-    try:
-        # Template MPD base
-        mpd_template = '''<?xml version="1.0" encoding="UTF-8"?>
-<MPD xmlns="urn:mpeg:dash:schema:mpd:2011" 
-     profiles="urn:mpeg:dash:profile:isoff-live:2011"
-     type="dynamic"
-     minimumUpdatePeriod="PT30S"
-     suggestedPresentationDelay="PT30S"
-     availabilityStartTime="{start_time}"
-     publishTime="{publish_time}"
-     timeShiftBufferDepth="PT5M"
-     maxSegmentDuration="PT10S">
-  
-  <Period start="PT0S">
-    <AdaptationSet mimeType="video/mp4" segmentAlignment="true">
-      <Representation id="video" bandwidth="{bandwidth}" width="{width}" height="{height}" codecs="avc1.640028">
-        <SegmentTemplate media="/proxy/dash-segment?template=$Number$.m4s&amp;base={base_url}&amp;stream={stream_id}" 
-                        initialization="/proxy/dash-segment?url={init_url}&amp;stream={stream_id}"
-                        duration="10" 
-                        startNumber="1" />
-      </Representation>
-    </AdaptationSet>
-    
-    <AdaptationSet mimeType="audio/mp4" segmentAlignment="true">
-      <Representation id="audio" bandwidth="128000" codecs="mp4a.40.2">
-        <SegmentTemplate media="/proxy/dash-segment?template=audio_$Number$.m4s&amp;base={base_url}&amp;stream={stream_id}"
-                        initialization="/proxy/dash-segment?url={audio_init_url}&amp;stream={stream_id}"
-                        duration="10" 
-                        startNumber="1" />
-      </Representation>
-    </AdaptationSet>
-  </Period>
-</MPD>'''
-
-        # Valori di default o da database/configurazione
-        now = datetime.utcnow()
-        start_time = now.isoformat() + 'Z'
-        publish_time = start_time
-        
-        # Parametri stream (dovrebbero venire dal tuo database)
-        bandwidth = request.args.get('bandwidth', '2000000')
-        width = request.args.get('width', '1280')
-        height = request.args.get('height', '720')
-        base_url = request.args.get('base_url', 'https://example.com/stream/')
-        init_url = urljoin(base_url, 'init.mp4')
-        audio_init_url = urljoin(base_url, 'audio_init.mp4')
-        
-        mpd_content = mpd_template.format(
-            start_time=start_time,
-            publish_time=publish_time,
-            bandwidth=bandwidth,
-            width=width,
-            height=height,
-            base_url=quote(base_url),
-            stream_id=stream_id,
-            init_url=quote(init_url),
-            audio_init_url=quote(audio_init_url)
-        )
-        
-        return Response(mpd_content, content_type="application/dash+xml")
-        
-    except Exception as e:
-        app.logger.error(f"Errore nella creazione master MPD: {str(e)}")
-        return f"Errore nella creazione master MPD: {str(e)}", 500
-
-# Aggiorna la cache configuration per includere MPD
-def setup_dash_cache():
-    """Configura cache specifiche per DASH"""
-    global MPD_CACHE
-    config = config_manager.load_config()
-    
-    # Cache MPD con TTL più breve per live streams
-    mpd_ttl = config.get('CACHE_TTL_MPD', 30)
-    mpd_maxsize = config.get('CACHE_MAXSIZE_MPD', 100)
-    
-    MPD_CACHE = TTLCache(maxsize=mpd_maxsize, ttl=mpd_ttl)
-    app.logger.info(f"Cache DASH configurata: TTL={mpd_ttl}s, MaxSize={mpd_maxsize}")
-
-# Aggiungi questa chiamata all'inizializzazione
-setup_dash_cache()
 
 @app.route('/login', methods=['GET', 'POST'])
 def login():
     """Pagina di login"""
+    # Traccia la richiesta se client_tracker è disponibile
+    try:
+        if 'client_tracker' in globals() and client_tracker is not None:
+            getattr(client_tracker, 'track_request', lambda *args, **kwargs: None)(request, '/login')
+    except Exception as e:
+        app.logger.warning(f"Errore nel tracking richiesta login: {e}")
+    
     if not check_ip_allowed():
         app.logger.warning(f"Tentativo di accesso da IP non autorizzato: {request.remote_addr}")
         return "Accesso negato: IP non autorizzato", 403
@@ -1577,6 +1746,12 @@ def login():
         if check_auth(username, password):
             session['logged_in'] = True
             session['username'] = username
+            # Traccia la sessione se client_tracker è disponibile
+            try:
+                if 'client_tracker' in globals():
+                    client_tracker.track_session(session.get('_id', str(id(session))), request)
+            except Exception as e:
+                app.logger.warning(f"Errore nel tracking sessione login: {e}")
             app.logger.info(f"Login riuscito per utente: {username}")
             return redirect(url_for('dashboard'))
         else:
@@ -1590,8 +1765,23 @@ def login():
 @login_required
 def dashboard():
     """Dashboard avanzata con statistiche di sistema"""
+    # Traccia la richiesta se client_tracker è disponibile
+    try:
+        if 'client_tracker' in globals():
+            client_tracker.track_request(request, '/dashboard')
+    except Exception as e:
+        app.logger.warning(f"Errore nel tracking richiesta dashboard: {e}")
+    
     stats = get_system_stats()
     daddy_base_url = get_daddylive_base_url()
+    
+    # Aggiungi informazioni pre-buffer alle statistiche
+    stats['prebuffer_info'] = {
+        'active_streams': stats.get('prebuffer_streams', 0),
+        'buffered_segments': stats.get('prebuffer_segments', 0),
+        'buffer_size_mb': stats.get('prebuffer_size_mb', 0),
+        'active_threads': stats.get('prebuffer_threads', 0)
+    }
     
     return render_template('dashboard.html', 
                          stats=stats, 
@@ -1622,8 +1812,23 @@ def admin_logs():
 @app.route('/')
 def index():
     """Pagina principale migliorata con informazioni Vavoo"""
+    # Traccia la richiesta se client_tracker è disponibile
+    try:
+        if 'client_tracker' in globals():
+            client_tracker.track_request(request, '/')
+    except Exception as e:
+        app.logger.warning(f"Errore nel tracking richiesta index: {e}")
+    
     stats = get_system_stats()
     base_url = get_daddylive_base_url()
+    
+    # Aggiungi informazioni pre-buffer alle statistiche
+    stats['prebuffer_info'] = {
+        'active_streams': stats.get('prebuffer_streams', 0),
+        'buffered_segments': stats.get('prebuffer_segments', 0),
+        'buffer_size_mb': stats.get('prebuffer_size_mb', 0),
+        'active_threads': stats.get('prebuffer_threads', 0)
+    }
     
     # Informazioni sulla funzionalità Vavoo
     vavoo_info = {
@@ -1648,7 +1853,23 @@ def index():
 @app.route('/logout')
 def logout():
     """Logout"""
+    # Traccia la richiesta se client_tracker è disponibile
+    try:
+        if 'client_tracker' in globals():
+            client_tracker.track_request(request, '/logout')
+    except Exception as e:
+        app.logger.warning(f"Errore nel tracking richiesta logout: {e}")
+    
     username = session.get('username', 'unknown')
+    session_id = session.get('_id', str(id(session)))
+    
+    # Rimuovi la sessione dal tracker se client_tracker è disponibile
+    try:
+        if 'client_tracker' in globals():
+            client_tracker.remove_session(session_id)
+    except Exception as e:
+        app.logger.warning(f"Errore nella rimozione sessione logout: {e}")
+    
     session.pop('logged_in', None)
     session.pop('username', None)
     app.logger.info(f"Logout per utente: {username}")
@@ -1668,11 +1889,44 @@ def save_config():
             else:
                 new_config['CACHE_ENABLED'] = bool(val)
         
+        # Gestisci configurazioni pre-buffer
+        if 'PREBUFFER_ENABLED' in new_config:
+            val = new_config['PREBUFFER_ENABLED']
+            if isinstance(val, str):
+                new_config['PREBUFFER_ENABLED'] = val.lower() in ('true', '1', 'yes')
+            else:
+                new_config['PREBUFFER_ENABLED'] = bool(val)
+        
+        # Converti valori numerici per pre-buffer
+        prebuffer_numeric_fields = [
+            'PREBUFFER_MAX_SEGMENTS',
+            'PREBUFFER_MAX_SIZE_MB', 
+            'PREBUFFER_CLEANUP_INTERVAL',
+            'PREBUFFER_MAX_MEMORY_PERCENT',
+            'PREBUFFER_EMERGENCY_THRESHOLD'
+        ]
+        
+        for field in prebuffer_numeric_fields:
+            if field in new_config:
+                val = new_config[field]
+                if isinstance(val, str):
+                    try:
+                        if field in ['PREBUFFER_MAX_MEMORY_PERCENT', 'PREBUFFER_EMERGENCY_THRESHOLD']:
+                            new_config[field] = float(val)
+                        else:
+                            new_config[field] = int(val)
+                    except ValueError:
+                        app.logger.warning(f"Valore non valido per {field}: {val}, usando default")
+                        # Rimuovi il campo invalido, userà il default
+                        del new_config[field]
+        
         # Salva la configurazione
         if config_manager.save_config(new_config):
             config_manager.apply_config_to_app(new_config)
             setup_proxies()
             setup_all_caches()
+            # Aggiorna la configurazione del pre-buffer
+            pre_buffer_manager.update_config()
             return jsonify({"status": "success", "message": "Configurazione salvata con successo"})
         else:
             return jsonify({"status": "error", "message": "Errore nel salvataggio"})
@@ -1836,7 +2090,7 @@ def import_config():
         if file.filename == '':
             return jsonify({"status": "error", "message": "Nessun file selezionato"}), 400
         
-        if not file.filename.endswith('.json'):
+        if not file.filename or not file.filename.endswith('.json'):
             return jsonify({"status": "error", "message": "Il file deve essere in formato JSON"}), 400
         
         # Leggi il contenuto del file
@@ -1908,7 +2162,7 @@ def download_log(filename):
 @app.route('/admin/clear-cache', methods=['POST'])
 @login_required
 def clear_cache():
-    """Pulisce tutte le cache di sistema (M3U8, TS, KEY, MPD)."""
+    """Pulisce tutte le cache di sistema (M3U8, TS, KEY)."""
     try:
         # La funzione setup_all_caches() reinizializza le cache,
         # che è il modo più efficace per pulirle completamente.
@@ -1916,13 +2170,265 @@ def clear_cache():
         app.logger.info("Cache di sistema pulita manualmente dall'amministratore.")
         return jsonify({
             "status": "success", 
-            "message": "Tutte le cache (M3U8, TS, KEY, MPD) sono state pulite con successo."
+            "message": "Tutte le cache (M3U8, TS, KEY) sono state pulite con successo."
         })
     except Exception as e:
         app.logger.error(f"Errore durante la pulizia manuale della cache: {e}")
         return jsonify({
             "status": "error", 
             "message": f"Errore durante la pulizia della cache: {str(e)}"
+        }), 500
+
+# NUOVA ROTTA: Pre-buffering Avanzato
+@app.route('/proxy/prebuffer')
+def proxy_prebuffer():
+    """Endpoint per pre-buffering manuale di segmenti specifici"""
+    m3u8_url = request.args.get('m3u8_url', '').strip()
+    stream_id = request.args.get('stream_id', '').strip()
+    
+    if not m3u8_url or not stream_id:
+        return jsonify({
+            "error": "Parametri mancanti",
+            "required": ["m3u8_url", "stream_id"]
+        }), 400
+    
+    try:
+        # Scarica il M3U8
+        headers = {
+            unquote(key[2:]).replace("_", "-"): unquote(value).strip()
+            for key, value in request.args.items()
+            if key.lower().startswith("h_")
+        }
+        
+        response = make_persistent_request(
+            m3u8_url,
+            headers=headers,
+            timeout=get_dynamic_timeout(m3u8_url),
+            allow_redirects=True
+        )
+        response.raise_for_status()
+        
+        m3u8_content = response.text
+        final_url = response.url
+        parsed_url = urlparse(final_url)
+        base_url = f"{parsed_url.scheme}://{parsed_url.netloc}{parsed_url.path.rsplit('/', 1)[0]}/"
+        
+        # Avvia il pre-buffering
+        pre_buffer_manager.pre_buffer_segments(m3u8_content, base_url, headers, stream_id)
+        
+        return jsonify({
+            "status": "success",
+            "message": f"Pre-buffering avviato per stream {stream_id}",
+            "stream_id": stream_id,
+            "segments_to_buffer": pre_buffer_manager.pre_buffer_config['max_segments']
+        })
+        
+    except Exception as e:
+        app.logger.error(f"Errore nel pre-buffering manuale: {e}")
+        return jsonify({
+            "status": "error",
+            "message": f"Errore nel pre-buffering: {str(e)}"
+        }), 500
+
+# NUOVA ROTTA: Stato Pre-buffer
+@app.route('/admin/prebuffer/status')
+@login_required
+def prebuffer_status():
+    """Mostra lo stato del sistema di pre-buffering"""
+    try:
+        with pre_buffer_manager.pre_buffer_lock:
+            buffer_info = {}
+            total_segments = 0
+            total_size = 0
+            
+            for stream_id, segments in pre_buffer_manager.pre_buffer.items():
+                stream_size = sum(len(content) for content in segments.values())
+                buffer_info[stream_id] = {
+                    "segments_count": len(segments),
+                    "total_size_mb": round(stream_size / (1024 * 1024), 2),
+                    "segments": list(segments.keys())[:5]  # Primi 5 segmenti
+                }
+                total_segments += len(segments)
+                total_size += stream_size
+            
+            active_threads = len(pre_buffer_manager.pre_buffer_threads)
+            
+        return jsonify({
+            "status": "success",
+            "pre_buffer_config": pre_buffer_manager.pre_buffer_config,
+            "active_streams": len(buffer_info),
+            "active_threads": active_threads,
+            "total_segments_buffered": total_segments,
+            "total_buffer_size_mb": round(total_size / (1024 * 1024), 2),
+            "streams": buffer_info
+        })
+        
+    except Exception as e:
+        app.logger.error(f"Errore nel recupero stato pre-buffer: {e}")
+        return jsonify({
+            "status": "error",
+            "message": f"Errore nel recupero stato: {str(e)}"
+        }), 500
+
+# NUOVA ROTTA: Pulisci Pre-buffer
+@app.route('/admin/prebuffer/clear', methods=['POST'])
+@login_required
+def clear_prebuffer():
+    """Pulisce tutti i buffer di pre-buffering"""
+    try:
+        with pre_buffer_manager.pre_buffer_lock:
+            streams_cleared = len(pre_buffer_manager.pre_buffer)
+            pre_buffer_manager.pre_buffer.clear()
+            pre_buffer_manager.pre_buffer_threads.clear()
+        
+        app.logger.info(f"Pre-buffer pulito: {streams_cleared} stream rimossi")
+        return jsonify({
+            "status": "success",
+            "message": f"Pre-buffer pulito: {streams_cleared} stream rimossi"
+        })
+        
+    except Exception as e:
+        app.logger.error(f"Errore nella pulizia del pre-buffer: {e}")
+        return jsonify({
+            "status": "error",
+            "message": f"Errore nella pulizia: {str(e)}"
+        }), 500
+
+# NUOVA ROTTA: Controllo Memoria
+@app.route('/admin/memory/status')
+@login_required
+def memory_status():
+    """Mostra lo stato della memoria e del buffer"""
+    try:
+        memory = psutil.virtual_memory()
+        
+        with pre_buffer_manager.pre_buffer_lock:
+            total_buffer_size = sum(
+                sum(len(content) for content in segments.values())
+                for segments in pre_buffer_manager.pre_buffer.values()
+            )
+            buffer_memory_percent = (total_buffer_size / memory.total) * 100
+        
+        return jsonify({
+            "status": "success",
+            "system_memory": {
+                "total_gb": round(memory.total / (1024**3), 2),
+                "used_gb": round(memory.used / (1024**3), 2),
+                "available_gb": round(memory.available / (1024**3), 2),
+                "percent": round(memory.percent, 1)
+            },
+            "buffer_memory": {
+                "size_mb": round(total_buffer_size / (1024*1024), 2),
+                "percent": round(buffer_memory_percent, 1),
+                "streams": len(pre_buffer_manager.pre_buffer),
+                "segments": sum(len(segments) for segments in pre_buffer_manager.pre_buffer.values())
+            },
+            "config": pre_buffer_manager.pre_buffer_config
+        })
+        
+    except Exception as e:
+        app.logger.error(f"Errore nel recupero stato memoria: {e}")
+        return jsonify({
+            "status": "error",
+            "message": f"Errore nel recupero stato: {str(e)}"
+        }), 500
+
+@app.route('/admin/memory/cleanup', methods=['POST'])
+@login_required
+def memory_cleanup():
+    """Pulizia manuale della memoria"""
+    try:
+        before_memory = psutil.virtual_memory()
+        
+        # Pulisci il pre-buffer
+        with pre_buffer_manager.pre_buffer_lock:
+            streams_cleared = len(pre_buffer_manager.pre_buffer)
+            total_size = sum(
+                sum(len(content) for content in segments.values())
+                for segments in pre_buffer_manager.pre_buffer.values()
+            )
+            pre_buffer_manager.pre_buffer.clear()
+            pre_buffer_manager.pre_buffer_threads.clear()
+        
+        # Pulisci le cache
+        setup_all_caches()
+        
+        after_memory = psutil.virtual_memory()
+        memory_freed = before_memory.used - after_memory.used
+        
+        app.logger.info(f"Pulizia memoria manuale: {streams_cleared} stream, {total_size / (1024*1024):.1f}MB liberati")
+        
+        return jsonify({
+            "status": "success",
+            "message": f"Pulizia completata: {streams_cleared} stream rimossi",
+            "memory_freed_mb": round(memory_freed / (1024*1024), 2),
+            "buffer_cleared_mb": round(total_size / (1024*1024), 2)
+        })
+        
+    except Exception as e:
+        app.logger.error(f"Errore nella pulizia memoria: {e}")
+        return jsonify({
+            "status": "error",
+            "message": f"Errore nella pulizia: {str(e)}"
+        }), 500
+
+# NUOVA ROTTA: Test Pre-buffering
+@app.route('/admin/prebuffer/test', methods=['POST'])
+@login_required
+def test_prebuffer():
+    """Testa il sistema di pre-buffering con un URL di esempio"""
+    try:
+        test_url = (request.json or {}).get('test_url', 'https://dash.akamaized.net/akamai/bbb_30fps/bbb_30fps.m3u8')
+        stream_id = pre_buffer_manager.get_stream_id_from_url(test_url)
+        
+        # Test del pre-buffering
+        headers = {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
+        }
+        
+        # Scarica il M3U8 di test
+        response = make_persistent_request(
+            test_url,
+            headers=headers,
+            timeout=10,
+            allow_redirects=True
+        )
+        response.raise_for_status()
+        
+        m3u8_content = response.text
+        final_url = response.url
+        parsed_url = urlparse(final_url)
+        base_url = f"{parsed_url.scheme}://{parsed_url.netloc}{parsed_url.path.rsplit('/', 1)[0]}/"
+        
+        # Avvia il pre-buffering
+        pre_buffer_manager.pre_buffer_segments(m3u8_content, base_url, headers, stream_id)
+        
+        # Attendi un momento per il pre-buffering
+        time.sleep(2)
+        
+        # Controlla lo stato del buffer
+        with pre_buffer_manager.pre_buffer_lock:
+            stream_buffer = pre_buffer_manager.pre_buffer.get(stream_id, {})
+            buffer_status = {
+                'stream_id': stream_id,
+                'segments_buffered': len(stream_buffer),
+                'buffer_size_mb': round(
+                    sum(len(content) for content in stream_buffer.values()) / (1024 * 1024), 2
+                ),
+                'test_url': test_url
+            }
+        
+        return jsonify({
+            "status": "success",
+            "message": "Test pre-buffering completato",
+            "results": buffer_status
+        })
+        
+    except Exception as e:
+        app.logger.error(f"Errore nel test pre-buffering: {e}")
+        return jsonify({
+            "status": "error",
+            "message": f"Errore nel test: {str(e)}"
         }), 500
 
 @app.route('/stats')
@@ -1933,9 +2439,35 @@ def get_stats():
     stats['session_count'] = len(SESSION_POOL)
     stats['proxy_count'] = len(PROXY_LIST)
     
+    # Aggiungi statistiche proxy
+    available_proxies = get_available_proxies()
+    
+    # Calcola statistiche IP
+    ip_stats = {'IPv4': 0, 'IPv6': 0, 'hostname': 0}
+    for proxy in PROXY_LIST:
+        ip_version = get_proxy_ip_version(proxy)
+        if ip_version in ip_stats:
+            ip_stats[ip_version] += 1
+    
+    available_ip_stats = {'IPv4': 0, 'IPv6': 0, 'hostname': 0}
+    for proxy in available_proxies:
+        ip_version = get_proxy_ip_version(proxy)
+        if ip_version in available_ip_stats:
+            available_ip_stats[ip_version] += 1
+    
+    stats['proxy_status'] = {
+        'available_proxies': len(available_proxies),
+        'blacklisted_proxies': len(PROXY_BLACKLIST),
+        'total_proxies': len(PROXY_LIST),
+        'ip_statistics': {
+            'total': ip_stats,
+            'available': available_ip_stats
+        }
+    }
+    
     # Aggiungi campi mancanti per il template admin.html
     stats['active_connections'] = len(SESSION_POOL)
-    stats['cache_size'] = f"{len(M3U8_CACHE) + len(TS_CACHE) + len(KEY_CACHE) + len(MPD_CACHE)} items"
+    stats['cache_size'] = f"{len(M3U8_CACHE) + len(TS_CACHE) + len(KEY_CACHE)} items"
     
     # Calcola uptime (tempo dall'avvio del processo)
     try:
@@ -1949,16 +2481,204 @@ def get_stats():
     # Calcola richieste per minuto (semplificato)
     stats['requests_per_min'] = len(SESSION_POOL) * 2  # Stima basata su sessioni attive
     
+    # Aggiungi statistiche pre-buffer
+    stats['prebuffer_info'] = {
+        'active_streams': stats.get('prebuffer_streams', 0),
+        'buffered_segments': stats.get('prebuffer_segments', 0),
+        'buffer_size_mb': stats.get('prebuffer_size_mb', 0),
+        'active_threads': stats.get('prebuffer_threads', 0)
+    }
+    
+    # Aggiungi statistiche client
+    try:
+        if 'client_tracker' in globals():
+            client_stats = client_tracker.get_realtime_stats()
+            stats.update(client_stats)
+        else:
+            # Fallback se client_tracker non è ancora disponibile
+            stats['active_clients'] = 0
+            stats['active_sessions'] = 0
+            stats['total_requests'] = 0
+            stats['m3u_clients'] = 0
+            stats['m3u_requests'] = 0
+    except Exception as e:
+        app.logger.warning(f"Errore nel recupero statistiche client per /stats: {e}")
+        # Fallback con valori di default
+        stats['active_clients'] = 0
+        stats['active_sessions'] = 0
+        stats['total_requests'] = 0
+        stats['m3u_clients'] = 0
+        stats['m3u_requests'] = 0
+    
     # Debug log per verificare i dati
-    app.logger.info(f"Stats endpoint chiamato - RAM: {stats.get('ram_usage', 0)}%, Cache: {stats.get('cache_size', '0')}, Sessions: {stats.get('session_count', 0)}")
+    app.logger.info(f"Stats endpoint chiamato - RAM: {stats.get('ram_usage', 0)}%, Cache: {stats.get('cache_size', '0')}, Sessions: {stats.get('session_count', 0)}, Clients: {stats.get('active_clients', 0)}, Pre-buffer: {stats.get('prebuffer_streams', 0)} streams")
     
     return jsonify(stats)
+
+@app.route('/admin/clients')
+@login_required
+def admin_clients():
+    """Pagina di amministrazione per visualizzare i client connessi"""
+    return render_template('clients.html')
+
+@app.route('/admin/clients/stats')
+@login_required
+def get_client_stats():
+    """Endpoint per ottenere statistiche dettagliate sui client"""
+    try:
+        if 'client_tracker' in globals():
+            return jsonify(client_tracker.get_client_stats())
+        else:
+            return jsonify({
+                'total_clients': 0,
+                'total_sessions': 0,
+                'client_counter': 0,
+                'active_clients': 0,
+                'active_sessions': 0,
+                'total_requests': 0,
+                'm3u_clients': 0,
+                'm3u_requests': 0,
+                'avg_connection_time': 0,
+                'clients': []
+            })
+    except Exception as e:
+        app.logger.error(f"Errore nel recupero statistiche client: {e}")
+        return jsonify({
+            'total_clients': 0,
+            'total_sessions': 0,
+            'client_counter': 0,
+            'active_clients': 0,
+            'active_sessions': 0,
+            'total_requests': 0,
+            'm3u_clients': 0,
+            'm3u_requests': 0,
+            'avg_connection_time': 0,
+            'clients': []
+        }), 500
+
+@app.route('/admin/clients/m3u-stats')
+@login_required
+def get_m3u_client_stats():
+    """Endpoint per ottenere statistiche specifiche sui client che usano /proxy/m3u"""
+    try:
+        if 'client_tracker' not in globals():
+            return jsonify({
+                'total_m3u_clients': 0,
+                'total_m3u_requests': 0,
+                'url_type_distribution': {},
+                'top_urls': [],
+                'clients': [],
+                'timestamp': datetime.now().isoformat()
+            })
+        
+        stats = client_tracker.get_client_stats()
+        
+        # Filtra solo client che usano /proxy/m3u
+        m3u_clients = [client for client in stats['clients'] if client['is_m3u_user']]
+        
+        # Calcola statistiche aggregate
+        total_m3u_requests = sum(client['m3u_requests'] for client in m3u_clients)
+        url_type_counts = {}
+        for client in m3u_clients:
+            for url_type in client['url_types']:
+                url_type_counts[url_type] = url_type_counts.get(url_type, 0) + 1
+        
+        # Top 10 URL più utilizzati
+        url_usage = {}
+        for client in m3u_clients:
+            if client['last_m3u_url']:
+                url = client['last_m3u_url']
+                url_usage[url] = url_usage.get(url, 0) + 1
+        
+        top_urls = sorted(url_usage.items(), key=lambda x: x[1], reverse=True)[:10]
+        
+        m3u_stats = {
+            'total_m3u_clients': len(m3u_clients),
+            'total_m3u_requests': total_m3u_requests,
+            'url_type_distribution': url_type_counts,
+            'top_urls': [{'url': url, 'count': count} for url, count in top_urls],
+            'clients': m3u_clients,
+            'timestamp': datetime.now().isoformat()
+        }
+        
+        return jsonify(m3u_stats)
+        
+    except Exception as e:
+        app.logger.error(f"Errore nel recupero statistiche M3U: {e}")
+        return jsonify({
+            "status": "error",
+            "message": f"Errore nel recupero statistiche: {str(e)}"
+        }), 500
+
+@app.route('/admin/clients/export')
+@login_required
+def export_client_stats():
+    """Esporta le statistiche dei client in formato CSV"""
+    try:
+        if 'client_tracker' not in globals():
+            return jsonify({"status": "error", "message": "Client tracker non disponibile"}), 500
+        
+        stats = client_tracker.get_client_stats()
+        
+        # Crea CSV
+        csv_data = "ID,IP,User Agent,Prima Connessione,Ultima Attività,Tempo Connessione (min),Richieste,Endpoint,Sessione\n"
+        
+        for client in stats['clients']:
+            csv_data += f"{client['id']},{client['ip']},\"{client['user_agent']}\",{client['first_seen']},{client['last_seen']},{client['connection_time_minutes']},{client['requests']},\"{','.join(client['endpoints'])}\",{'Sì' if client['has_session'] else 'No'}\n"
+        
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        filename = f"client_stats_{timestamp}.csv"
+        
+        return Response(
+            csv_data,
+            mimetype='text/csv',
+            headers={
+                'Content-Disposition': f'attachment; filename={filename}',
+                'Cache-Control': 'no-cache'
+            }
+        )
+    except Exception as e:
+        app.logger.error(f"Errore nell'esportazione statistiche client: {e}")
+        return jsonify({"status": "error", "message": f"Errore nell'esportazione: {str(e)}"}), 500
+
+@app.route('/admin/clients/clear', methods=['POST'])
+@login_required
+def clear_client_stats():
+    """Pulisce le statistiche dei client"""
+    try:
+        if 'client_tracker' not in globals():
+            return jsonify({"status": "error", "message": "Client tracker non disponibile"}), 500
+        
+        with client_tracker.client_lock:
+            cleared_count = len(client_tracker.active_clients)
+            client_tracker.active_clients.clear()
+            client_tracker.session_clients.clear()
+            client_tracker.client_counter = 0
+        
+        app.logger.info(f"Statistiche client pulite: {cleared_count} client rimossi")
+        return jsonify({
+            "status": "success",
+            "message": f"Statistiche client pulite: {cleared_count} client rimossi"
+        })
+    except Exception as e:
+        app.logger.error(f"Errore nella pulizia statistiche client: {e}")
+        return jsonify({
+            "status": "error",
+            "message": f"Errore nella pulizia: {str(e)}"
+        }), 500
 
 # --- Route Proxy (mantieni tutte le route proxy esistenti) ---
 
 @app.route('/proxy/vavoo')
 def proxy_vavoo():
     """Route specifica per testare la risoluzione Vavoo"""
+    # Traccia la richiesta se client_tracker è disponibile
+    try:
+        if 'client_tracker' in globals():
+            client_tracker.track_request(request, '/proxy/vavoo')
+    except Exception as e:
+        app.logger.warning(f"Errore nel tracking richiesta Vavoo: {e}")
+    
     url = request.args.get('url', '').strip()
     if not url:
         return jsonify({
@@ -2004,7 +2724,14 @@ def proxy_vavoo():
 
 @app.route('/proxy/m3u')
 def proxy_m3u():
-    """Proxy per file M3U e M3U8 con supporto DaddyLive 2025 e caching intelligente"""
+    """Proxy per file M3U e M3U8 con supporto DaddyLive 2025, caching intelligente e pre-buffering"""
+    # Traccia la richiesta se client_tracker è disponibile
+    try:
+        if 'client_tracker' in globals():
+            client_tracker.track_request(request, '/proxy/m3u')
+    except Exception as e:
+        app.logger.warning(f"Errore nel tracking richiesta M3U: {e}")
+    
     m3u_url = request.args.get('url', '').strip()
     if not m3u_url:
         return "Errore: Parametro 'url' mancante", 400
@@ -2073,6 +2800,9 @@ def proxy_m3u():
 
         headers_query = "&".join([f"h_{quote(k)}={quote(v)}" for k, v in current_headers_for_proxy.items()])
 
+        # Genera stream ID per il pre-buffering
+        stream_id = pre_buffer_manager.get_stream_id_from_url(m3u_url)
+
         modified_m3u8 = []
         for line in m3u_content.splitlines():
             line = line.strip()
@@ -2081,12 +2811,21 @@ def proxy_m3u():
             elif line and not line.startswith("#"):
                 segment_url = urljoin(base_url, line)
                 if headers_query:
-                    line = f"/proxy/ts?url={quote(segment_url)}&{headers_query}"
+                    line = f"/proxy/ts?url={quote(segment_url)}&{headers_query}&stream_id={stream_id}"
                 else:
-                    line = f"/proxy/ts?url={quote(segment_url)}"
+                    line = f"/proxy/ts?url={quote(segment_url)}&stream_id={stream_id}"
             modified_m3u8.append(line)
 
         modified_m3u8_content = "\n".join(modified_m3u8)
+
+        # Avvia il pre-buffering in background
+        def start_pre_buffering():
+            try:
+                pre_buffer_manager.pre_buffer_segments(m3u_content, base_url, current_headers_for_proxy, stream_id)
+            except Exception as e:
+                app.logger.error(f"Errore nell'avvio del pre-buffering: {e}")
+
+        Thread(target=start_pre_buffering, daemon=True).start()
 
         def cache_later():
             if not cache_enabled:
@@ -2143,8 +2882,17 @@ def proxy_resolve():
 
 @app.route('/proxy/ts')
 def proxy_ts():
-    """Proxy per segmenti .TS con connessioni persistenti, headers personalizzati e caching"""
+    """Proxy per segmenti .TS con connessioni persistenti, headers personalizzati, caching e pre-buffering"""
+    # Traccia la richiesta se client_tracker è disponibile
+    try:
+        if 'client_tracker' in globals():
+            client_tracker.track_request(request, '/proxy/ts')
+    except Exception as e:
+        app.logger.warning(f"Errore nel tracking richiesta TS: {e}")
+    
     ts_url = request.args.get('url', '').strip()
+    stream_id = request.args.get('stream_id', '').strip()
+    
     if not ts_url:
         return "Errore: Parametro 'url' mancante", 400
 
@@ -2152,6 +2900,14 @@ def proxy_ts():
     config = config_manager.load_config()
     cache_enabled = config.get('CACHE_ENABLED', True)
     
+    # 1. Controlla prima il pre-buffer (più veloce)
+    if stream_id:
+        buffered_content = pre_buffer_manager.get_buffered_segment(ts_url, stream_id)
+        if buffered_content:
+            app.logger.info(f"Pre-buffer HIT per TS: {ts_url}")
+            return Response(buffered_content, content_type="video/mp2t")
+    
+    # 2. Controlla la cache normale
     if cache_enabled and ts_url in TS_CACHE:
         app.logger.info(f"Cache HIT per TS: {ts_url}")
         return Response(TS_CACHE[ts_url], content_type="video/mp2t")
@@ -2192,7 +2948,7 @@ def proxy_ts():
                 except (requests.exceptions.ConnectionError, requests.exceptions.ReadTimeout) as e:
                     if "Read timed out" in str(e) or "timed out" in str(e).lower():
                         app.logger.warning(f"Timeout durante il download del segmento TS (tentativo {attempt + 1}): {ts_url}")
-                        return
+                        return b""  # Return empty bytes instead of None
                     raise
                 finally:
                     ts_content = b"".join(content_parts)
@@ -2221,10 +2977,20 @@ def proxy_ts():
         except requests.RequestException as e:
             app.logger.error(f"Errore durante il download del segmento TS: {str(e)}")
             return f"Errore durante il download del segmento TS: {str(e)}", 500
-        
+    
+    # If we get here, all retries failed
+    return "Errore: Impossibile scaricare il segmento TS dopo tutti i tentativi", 500
+
 @app.route('/proxy')
 def proxy():
     """Proxy per liste M3U che aggiunge automaticamente /proxy/m3u?url= con IP prima dei link"""
+    # Traccia la richiesta se client_tracker è disponibile
+    try:
+        if 'client_tracker' in globals():
+            client_tracker.track_request(request, '/proxy')
+    except Exception as e:
+        app.logger.warning(f"Errore nel tracking richiesta proxy: {e}")
+    
     m3u_url = request.args.get('url', '').strip()
     if not m3u_url:
         return "Errore: Parametro 'url' mancante", 400
@@ -2326,6 +3092,13 @@ def proxy():
 @app.route('/proxy/key')
 def proxy_key():
     """Proxy per la chiave AES-128 con headers personalizzati e caching"""
+    # Traccia la richiesta se client_tracker è disponibile
+    try:
+        if 'client_tracker' in globals():
+            client_tracker.track_request(request, '/proxy/key')
+    except Exception as e:
+        app.logger.warning(f"Errore nel tracking richiesta key: {e}")
+    
     key_url = request.args.get('url', '').strip()
     if not key_url:
         return "Errore: Parametro 'url' mancante per la chiave", 400
@@ -2374,9 +3147,520 @@ def proxy_key():
 saved_config = config_manager.load_config()
 config_manager.apply_config_to_app(saved_config)
 
+# Valida e aggiorna la configurazione del pre-buffer
+pre_buffer_manager.update_config()
+app.logger.info("Configurazione pre-buffer inizializzata con successo")
+
 # Inizializza le cache
 setup_all_caches()
 setup_proxies()
+
+# --- Sistema di Tracking Client Connessi ---
+class ClientTracker:
+    def __init__(self):
+        self.active_clients = {}  # {client_id: {'ip': ip, 'user_agent': ua, 'first_seen': timestamp, 'last_seen': timestamp, 'requests': 0, 'endpoints': set()}}
+        self.client_lock = Lock()
+        self.client_counter = 0
+        self.session_clients = {}  # {session_id: client_id} per tracking sessioni Flask
+    
+    def get_client_id(self, request):
+        """Genera un ID univoco per il client"""
+        # Usa IP + User-Agent per identificare client unici
+        ip = request.environ.get('HTTP_X_FORWARDED_FOR', request.environ.get('REMOTE_ADDR'))
+        user_agent = request.headers.get('User-Agent', 'Unknown')
+        
+        # Crea un hash per identificare client unici
+        client_hash = hashlib.md5(f"{ip}:{user_agent}".encode()).hexdigest()[:12]
+        return client_hash
+    
+    def track_request(self, request, endpoint):
+        """Traccia una richiesta da un client"""
+        client_id = self.get_client_id(request)
+        current_time = time.time()
+        ip = request.environ.get('HTTP_X_FORWARDED_FOR', request.environ.get('REMOTE_ADDR'))
+        user_agent = request.headers.get('User-Agent', 'Unknown')
+        
+        # Estrai informazioni aggiuntive per /proxy/m3u
+        additional_info = {}
+        if endpoint == '/proxy/m3u':
+            url_param = request.args.get('url', '')
+            if url_param:
+                additional_info['last_m3u_url'] = url_param
+                # Categorizza il tipo di URL
+                if 'vavoo.to' in url_param.lower():
+                    additional_info['url_type'] = 'vavoo'
+                elif 'newkso.ru' in url_param.lower() or '/stream-' in url_param.lower():
+                    additional_info['url_type'] = 'daddylive'
+                elif '.m3u8' in url_param.lower():
+                    additional_info['url_type'] = 'm3u8'
+                elif '.m3u' in url_param.lower():
+                    additional_info['url_type'] = 'm3u'
+                else:
+                    additional_info['url_type'] = 'other'
+        
+        with self.client_lock:
+            if client_id not in self.active_clients:
+                self.active_clients[client_id] = {
+                    'ip': ip,
+                    'user_agent': user_agent,
+                    'first_seen': current_time,
+                    'last_seen': current_time,
+                    'requests': 0,
+                    'endpoints': set(),
+                    'session_id': None,
+                    'm3u_requests': 0,
+                    'last_m3u_url': None,
+                    'url_types': set(),
+                    'additional_info': {}
+                }
+                self.client_counter += 1
+                app.logger.info(f"Nuovo client connesso: {ip} (ID: {client_id})")
+            
+            # Aggiorna statistiche
+            client = self.active_clients[client_id]
+            client['last_seen'] = current_time
+            client['requests'] += 1
+            client['endpoints'].add(endpoint)
+            
+            # Aggiorna statistiche specifiche per M3U
+            if endpoint == '/proxy/m3u':
+                client['m3u_requests'] += 1
+                if 'last_m3u_url' in additional_info:
+                    client['last_m3u_url'] = additional_info['last_m3u_url']
+                if 'url_type' in additional_info:
+                    client['url_types'].add(additional_info['url_type'])
+            
+            # Aggiorna informazioni aggiuntive
+            client['additional_info'].update(additional_info)
+    
+    def track_session(self, session_id, request):
+        """Traccia una sessione Flask"""
+        client_id = self.get_client_id(request)
+        with self.client_lock:
+            self.session_clients[session_id] = client_id
+            if client_id in self.active_clients:
+                self.active_clients[client_id]['session_id'] = session_id
+    
+    def remove_session(self, session_id):
+        """Rimuove una sessione"""
+        with self.client_lock:
+            if session_id in self.session_clients:
+                client_id = self.session_clients[session_id]
+                if client_id in self.active_clients:
+                    self.active_clients[client_id]['session_id'] = None
+                del self.session_clients[session_id]
+    
+    def cleanup_inactive_clients(self, timeout=300):  # 5 minuti di inattività
+        """Rimuove client inattivi"""
+        current_time = time.time()
+        with self.client_lock:
+            inactive_clients = []
+            for client_id, client_data in self.active_clients.items():
+                if current_time - client_data['last_seen'] > timeout:
+                    inactive_clients.append(client_id)
+            
+            for client_id in inactive_clients:
+                client_data = self.active_clients[client_id]
+                app.logger.info(f"Client disconnesso: {client_data['ip']} (ID: {client_id}) - Inattivo per {timeout}s")
+                del self.active_clients[client_id]
+                self.client_counter -= 1
+    
+    def get_client_stats(self):
+        """Restituisce statistiche sui client"""
+        with self.client_lock:
+            current_time = time.time()
+            
+            # Calcola statistiche aggregate M3U
+            m3u_clients = [client for client in self.active_clients.values() if '/proxy/m3u' in client['endpoints']]
+            total_m3u_requests = sum(client.get('m3u_requests', 0) for client in m3u_clients)
+            
+            stats = {
+                'total_clients': len(self.active_clients),
+                'total_sessions': len(self.session_clients),
+                'client_counter': self.client_counter,
+                'active_clients': len(self.active_clients),
+                'active_sessions': len(self.session_clients),
+                'total_requests': sum(client['requests'] for client in self.active_clients.values()),
+                'm3u_clients': len(m3u_clients),
+                'm3u_requests': total_m3u_requests,
+                'clients': []
+            }
+            
+            # Calcola tempo medio di connessione
+            if self.active_clients:
+                total_connection_time = sum(current_time - client['first_seen'] for client in self.active_clients.values())
+                stats['avg_connection_time'] = (total_connection_time / len(self.active_clients)) / 60  # in minuti
+            else:
+                stats['avg_connection_time'] = 0
+            
+            for client_id, client_data in self.active_clients.items():
+                # Calcola tempo di connessione
+                connection_time = current_time - client_data['first_seen']
+                last_activity = current_time - client_data['last_seen']
+                
+                stats['clients'].append({
+                    'id': client_id,
+                    'ip': client_data['ip'],
+                    'user_agent': client_data['user_agent'][:50] + '...' if len(client_data['user_agent']) > 50 else client_data['user_agent'],
+                    'first_seen': datetime.fromtimestamp(client_data['first_seen']).strftime('%H:%M:%S'),
+                    'last_seen': datetime.fromtimestamp(client_data['last_seen']).strftime('%H:%M:%S'),
+                    'connection_time_minutes': round(connection_time / 60, 1),
+                    'last_activity_seconds': round(last_activity, 1),
+                    'requests': client_data['requests'],
+                    'm3u_requests': client_data.get('m3u_requests', 0),
+                    'endpoints': list(client_data['endpoints']),
+                    'has_session': client_data['session_id'] is not None,
+                    'last_m3u_url': client_data.get('last_m3u_url'),
+                    'url_types': list(client_data.get('url_types', set())),
+                    'is_m3u_user': '/proxy/m3u' in client_data['endpoints']
+                })
+            
+            # Ordina per ultima attività
+            stats['clients'].sort(key=lambda x: x['last_activity_seconds'])
+            return stats
+    
+    def get_realtime_stats(self):
+        """Statistiche in tempo reale per WebSocket"""
+        with self.client_lock:
+            # Calcola statistiche M3U
+            m3u_clients = [client for client in self.active_clients.values() if '/proxy/m3u' in client['endpoints']]
+            total_m3u_requests = sum(client.get('m3u_requests', 0) for client in m3u_clients)
+            
+            return {
+                'active_clients': len(self.active_clients),
+                'active_sessions': len(self.session_clients),
+                'total_requests': sum(client['requests'] for client in self.active_clients.values()),
+                'm3u_clients': len(m3u_clients),
+                'm3u_requests': total_m3u_requests,
+                'timestamp': time.time()
+            }
+
+# Istanza globale del tracker - inizializzata subito dopo la definizione della classe
+client_tracker = ClientTracker()
+
+# Thread per pulizia client inattivi
+def cleanup_clients_thread():
+    while True:
+        try:
+            client_tracker.cleanup_inactive_clients()
+            time.sleep(60)  # Controlla ogni minuto
+        except Exception as e:
+            app.logger.error(f"Errore nella pulizia client: {e}")
+            time.sleep(300)
+
+cleanup_clients_thread_instance = Thread(target=cleanup_clients_thread, daemon=True)
+cleanup_clients_thread_instance.start()
+
+def get_proxy_for_url(url):
+    config = config_manager.load_config()
+    no_proxy_domains = [d.strip() for d in config.get('NO_PROXY_DOMAINS', '').split(',') if d.strip()]
+    
+    # Pulisci blacklist scaduta
+    cleanup_expired_blacklist()
+    
+    # Ottieni solo proxy disponibili (non blacklistati)
+    available_proxies = get_available_proxies()
+    
+    if not available_proxies:
+        app.logger.warning("Nessun proxy disponibile (tutti in blacklist)")
+        return None
+    
+    try:
+        parsed_url = urlparse(url)
+        if any(domain in parsed_url.netloc for domain in no_proxy_domains):
+            return None
+    except Exception:
+        pass
+    
+    chosen_proxy = random.choice(available_proxies)
+    return {'http': chosen_proxy, 'https': chosen_proxy}
+
+def safe_http_request(url, headers=None, timeout=None, proxies=None, **kwargs):
+    """Effettua una richiesta HTTP con gestione automatica degli errori 429 sui proxy"""
+    max_retries = 3
+    retry_delay = 1
+    
+    for attempt in range(max_retries):
+        try:
+            # Convert string proxy to dict format if needed
+            proxy_dict = None
+            if isinstance(proxies, dict):
+                proxy_dict = proxies
+            elif isinstance(proxies, str):
+                proxy_dict = {'http': proxies, 'https': proxies}
+            
+            response = requests.get(
+                url,
+                headers=headers,
+                timeout=timeout or REQUEST_TIMEOUT,
+                proxies=proxy_dict,
+                verify=VERIFY_SSL,
+                **kwargs
+            )
+            return response
+            
+        except requests.exceptions.ProxyError as e:
+            # Gestione specifica per errori proxy (incluso 429)
+            error_str = str(e).lower()
+            if ("429" in error_str or "too many requests" in error_str) and proxies:
+                # Estrai l'URL del proxy dall'errore
+                proxy_url = None
+                if isinstance(proxies, dict):
+                    proxy_url = proxies.get('http') or proxies.get('https')
+                elif isinstance(proxies, str):
+                    proxy_url = proxies
+                
+                if proxy_url:
+                    app.logger.warning(f"Proxy {proxy_url} ha restituito errore 429 (tentativo {attempt + 1}/{max_retries})")
+                    add_proxy_to_blacklist(proxy_url, "429")
+                    
+                    # Prova con un nuovo proxy se disponibile
+                    if attempt < max_retries - 1:
+                        new_proxy_config = get_proxy_for_url(url)
+                        if new_proxy_config:
+                            proxies = new_proxy_config
+                            app.logger.info(f"Tentativo con nuovo proxy per {url}")
+                            time.sleep(retry_delay)
+                            retry_delay *= 2  # Exponential backoff
+                            continue
+            
+            app.logger.error(f"Errore proxy nella richiesta HTTP: {e}")
+            if attempt == max_retries - 1:
+                raise
+            time.sleep(retry_delay)
+            retry_delay *= 2
+            
+        except requests.RequestException as e:
+            app.logger.error(f"Errore nella richiesta HTTP: {e}")
+            if attempt == max_retries - 1:
+                raise
+            time.sleep(retry_delay)
+            retry_delay *= 2
+    
+    # Se arriviamo qui, tutti i tentativi sono falliti
+    raise requests.RequestException(f"Tutti i {max_retries} tentativi falliti per {url}")
+
+@app.route('/admin/proxy/status')
+@login_required
+def proxy_status():
+    """Mostra lo stato dei proxy e della blacklist"""
+    try:
+        with PROXY_BLACKLIST_LOCK:
+            blacklist_info = {}
+            for proxy_url, info in PROXY_BLACKLIST.items():
+                blacklist_info[proxy_url] = {
+                    'error_count': info['error_count'],
+                    'error_type': info['error_type'],
+                    'last_error': datetime.fromtimestamp(info['last_error']).strftime('%H:%M:%S'),
+                    'blacklisted_until': datetime.fromtimestamp(info['blacklisted_until']).strftime('%H:%M:%S'),
+                    'is_expired': time.time() > info['blacklisted_until'],
+                    'ip_version': get_proxy_ip_version(proxy_url)
+                }
+        
+        available_proxies = get_available_proxies()
+        
+        # Analizza i tipi di IP per tutti i proxy
+        ip_stats = {'IPv4': 0, 'IPv6': 0, 'hostname': 0}
+        for proxy in PROXY_LIST:
+            ip_version = get_proxy_ip_version(proxy)
+            if ip_version in ip_stats:
+                ip_stats[ip_version] += 1
+        
+        # Analizza i tipi di IP per i proxy disponibili
+        available_ip_stats = {'IPv4': 0, 'IPv6': 0, 'hostname': 0}
+        for proxy in available_proxies:
+            ip_version = get_proxy_ip_version(proxy)
+            if ip_version in available_ip_stats:
+                available_ip_stats[ip_version] += 1
+        
+        return jsonify({
+            'status': 'success',
+            'total_proxies': len(PROXY_LIST),
+            'available_proxies': len(available_proxies),
+            'blacklisted_proxies': len(PROXY_BLACKLIST),
+            'ip_statistics': {
+                'total': ip_stats,
+                'available': available_ip_stats
+            },
+            'blacklist_info': blacklist_info,
+            'available_proxy_list': available_proxies,
+            'all_proxy_list': PROXY_LIST
+        })
+        
+    except Exception as e:
+        app.logger.error(f"Errore nel recupero stato proxy: {e}")
+        return jsonify({
+            'status': 'error',
+            'message': f"Errore nel recupero stato: {str(e)}"
+        }), 500
+
+@app.route('/admin/proxy/clear-blacklist', methods=['POST'])
+@login_required
+def clear_proxy_blacklist():
+    """Pulisce la blacklist dei proxy"""
+    try:
+        with PROXY_BLACKLIST_LOCK:
+            cleared_count = len(PROXY_BLACKLIST)
+            PROXY_BLACKLIST.clear()
+        
+        app.logger.info(f"Blacklist proxy pulita: {cleared_count} proxy rimossi")
+        return jsonify({
+            'status': 'success',
+            'message': f"Blacklist proxy pulita: {cleared_count} proxy rimossi"
+        })
+        
+    except Exception as e:
+        app.logger.error(f"Errore nella pulizia blacklist proxy: {e}")
+        return jsonify({
+            'status': 'error',
+            'message': f"Errore nella pulizia: {str(e)}"
+        }), 500
+
+# Thread per pulizia blacklist scaduta
+def cleanup_blacklist_thread():
+    """Thread per pulire automaticamente la blacklist scaduta"""
+    while True:
+        try:
+            time.sleep(60)  # Controlla ogni minuto
+            cleaned = cleanup_expired_blacklist()
+            if cleaned > 0:
+                app.logger.info(f"Pulizia automatica blacklist: {cleaned} proxy rimossi")
+        except Exception as e:
+            app.logger.error(f"Errore nella pulizia automatica blacklist: {e}")
+            time.sleep(300)  # In caso di errore, aspetta 5 minuti
+
+cleanup_blacklist_thread_instance = Thread(target=cleanup_blacklist_thread, daemon=True)
+cleanup_blacklist_thread_instance.start()
+
+@app.route('/admin/test/github', methods=['POST'])
+@login_required
+def test_github_connection():
+    """Testa la connessione diretta a GitHub senza proxy"""
+    try:
+        github_url = 'https://raw.githubusercontent.com/thecrewwh/dl_url/refs/heads/main/dl.xml'
+        
+        # Test con connessione diretta (senza proxy)
+        session = requests.Session()
+        session.trust_env = False  # Ignora variabili d'ambiente proxy
+        
+        start_time = time.time()
+        response = session.get(github_url, timeout=10, verify=VERIFY_SSL)
+        end_time = time.time()
+        
+        if response.status_code == 200:
+            return jsonify({
+                'status': 'success',
+                'message': f'Connessione diretta a GitHub OK in {end_time - start_time:.2f}s',
+                'response_time': round(end_time - start_time, 2),
+                'status_code': response.status_code,
+                'content_length': len(response.text)
+            })
+        else:
+            return jsonify({
+                'status': 'error',
+                'message': f'GitHub risponde con status {response.status_code}',
+                'status_code': response.status_code
+            })
+            
+    except requests.exceptions.Timeout:
+        return jsonify({
+            'status': 'error',
+            'message': 'Timeout nella connessione diretta a GitHub'
+        }), 500
+    except requests.exceptions.ConnectionError as e:
+        return jsonify({
+            'status': 'error',
+            'message': f'Errore di connessione diretta a GitHub: {str(e)}'
+        }), 500
+    except Exception as e:
+        return jsonify({
+            'status': 'error',
+            'message': f'Errore generico nel test GitHub: {str(e)}'
+        }), 500
+
+@app.route('/admin/test/ipv6-proxies', methods=['POST'])
+@login_required
+def test_ipv6_proxies():
+    """Testa specificamente i proxy IPv6"""
+    try:
+        # Filtra solo i proxy IPv6
+        ipv6_proxies = []
+        for proxy in PROXY_LIST:
+            if get_proxy_ip_version(proxy) == "IPv6":
+                ipv6_proxies.append(proxy)
+        
+        if not ipv6_proxies:
+            return jsonify({
+                'status': 'info',
+                'message': 'Nessun proxy IPv6 configurato',
+                'ipv6_proxies': []
+            })
+        
+        results = []
+        test_url = 'https://httpbin.org/ip'
+        
+        for proxy in ipv6_proxies:
+            try:
+                # Test con timeout ridotto per IPv6
+                proxies = {'http': proxy, 'https': proxy}
+                response = requests.get(test_url, proxies=proxies, timeout=10, verify=VERIFY_SSL)
+                
+                if response.status_code == 200:
+                    ip_info = response.json()
+                    results.append({
+                        'proxy': proxy,
+                        'status': 'success',
+                        'response_time': response.elapsed.total_seconds(),
+                        'ip_detected': ip_info.get('origin', 'unknown'),
+                        'message': f'IPv6 proxy funzionante in {response.elapsed.total_seconds():.2f}s'
+                    })
+                else:
+                    results.append({
+                        'proxy': proxy,
+                        'status': 'error',
+                        'message': f'Status code: {response.status_code}'
+                    })
+                    
+            except requests.exceptions.Timeout:
+                results.append({
+                    'proxy': proxy,
+                    'status': 'timeout',
+                    'message': 'Timeout nella connessione IPv6'
+                })
+            except requests.exceptions.ConnectionError as e:
+                results.append({
+                    'proxy': proxy,
+                    'status': 'connection_error',
+                    'message': f'Errore di connessione IPv6: {str(e)}'
+                })
+            except Exception as e:
+                results.append({
+                    'proxy': proxy,
+                    'status': 'error',
+                    'message': f'Errore generico: {str(e)}'
+                })
+        
+        # Calcola statistiche
+        successful = len([r for r in results if r['status'] == 'success'])
+        total = len(results)
+        
+        return jsonify({
+            'status': 'success',
+            'message': f'Test IPv6 completato: {successful}/{total} proxy funzionanti',
+            'ipv6_proxies': ipv6_proxies,
+            'results': results,
+            'statistics': {
+                'total': total,
+                'successful': successful,
+                'failed': total - successful
+            }
+        })
+        
+    except Exception as e:
+        return jsonify({
+            'status': 'error',
+            'message': f'Errore nel test IPv6: {str(e)}'
+        }), 500
 
 if __name__ == '__main__':
     port = int(os.environ.get("PORT", 7860))
