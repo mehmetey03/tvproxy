@@ -197,12 +197,19 @@ class VavooResolver:
             }
         }
         try:
-            # Usa una sessione pulita senza proxy per la richiesta Vavoo
-            clean_session = requests.Session()
-            clean_session.trust_env = False  # Ignora variabili d'ambiente proxy
-            clean_session.headers.update(headers)
+            # Usa il sistema di proxy configurato
+            proxy_config = get_proxy_for_url("https://www.vavoo.tv/api/app/ping", original_url="https://vavoo.to")
+            proxy_key = proxy_config['http'] if proxy_config else None
             
-            resp = clean_session.post("https://www.vavoo.tv/api/app/ping", json=data, timeout=10, verify=VERIFY_SSL)
+            # Usa make_persistent_request per sfruttare il sistema di proxy
+            resp = make_persistent_request(
+                "https://www.vavoo.tv/api/app/ping",
+                headers=headers,
+                timeout=10,
+                proxy_url=proxy_key,
+                method='POST',
+                json=data
+            )
             resp.raise_for_status()
             return resp.json().get("addonSig")
         except Exception as e:
@@ -240,12 +247,19 @@ class VavooResolver:
         }
         
         try:
-            # Usa una sessione pulita senza proxy per la risoluzione Vavoo
-            clean_session = requests.Session()
-            clean_session.trust_env = False  # Ignora variabili d'ambiente proxy
-            clean_session.headers.update(headers)
+            # Usa il sistema di proxy configurato
+            proxy_config = get_proxy_for_url("https://vavoo.to/mediahubmx-resolve.json", original_url=link)
+            proxy_key = proxy_config['http'] if proxy_config else None
             
-            resp = clean_session.post("https://vavoo.to/mediahubmx-resolve.json", json=data, timeout=10, verify=VERIFY_SSL)
+            # Usa make_persistent_request per sfruttare il sistema di proxy
+            resp = make_persistent_request(
+                "https://vavoo.to/mediahubmx-resolve.json",
+                headers=headers,
+                timeout=10,
+                proxy_url=proxy_key,
+                method='POST',
+                json=data
+            )
             resp.raise_for_status()
             
             if verbose:
@@ -736,10 +750,14 @@ class ConfigManager:
     
     def apply_config_to_app(self, config):
         """Applica la configurazione all'app Flask"""
+        proxy_keys = ['SOCKS5_PROXY', 'HTTP_PROXY', 'HTTPS_PROXY']
+        
         for key, value in config.items():
             if hasattr(app, 'config'):
                 app.config[key] = value
-            os.environ[key] = str(value)
+            # Non impostare le variabili d'ambiente per i proxy per evitare conflitti
+            if key not in proxy_keys:
+                os.environ[key] = str(value)
         return True
 
 config_manager = ConfigManager()
@@ -944,7 +962,7 @@ class PreBufferManager:
                             # Scarica il segmento
                             # Note: These functions are defined later in the file
                             # They will be available when the class is actually used
-                            proxy_config = globals().get('get_proxy_for_url', lambda x: None)(segment_url)
+                            proxy_config = globals().get('get_proxy_for_url', lambda x, y=None: None)(segment_url)
                             proxy_key = proxy_config['http'] if proxy_config else None
                             
                             response = globals().get('make_persistent_request', lambda *args, **kwargs: None)(
@@ -1284,6 +1302,9 @@ def create_robust_session():
     """Crea una sessione con configurazione robusta e keep-alive per connessioni persistenti."""
     session = requests.Session()
     
+    # Ignora le variabili d'ambiente proxy per evitare conflitti
+    session.trust_env = False
+    
     # Configurazione Keep-Alive
     session.headers.update({
         'Connection': 'keep-alive',
@@ -1331,7 +1352,7 @@ def get_persistent_session(proxy_url=None):
         
         return SESSION_POOL[pool_key]
 
-def make_persistent_request(url, headers=None, timeout=None, proxy_url=None, **kwargs):
+def make_persistent_request(url, headers=None, timeout=None, proxy_url=None, method='GET', **kwargs):
     """Effettua una richiesta usando connessioni persistenti"""
     session = get_persistent_session(proxy_url)
     
@@ -1345,13 +1366,22 @@ def make_persistent_request(url, headers=None, timeout=None, proxy_url=None, **k
         request_headers.update(headers)
     
     try:
-        response = session.get(
-            url, 
-            headers=request_headers, 
-            timeout=timeout or REQUEST_TIMEOUT,
-            verify=VERIFY_SSL,
-            **kwargs
-        )
+        if method.upper() == 'POST':
+            response = session.post(
+                url, 
+                headers=request_headers, 
+                timeout=timeout or REQUEST_TIMEOUT,
+                verify=VERIFY_SSL,
+                **kwargs
+            )
+        else:
+            response = session.get(
+                url, 
+                headers=request_headers, 
+                timeout=timeout or REQUEST_TIMEOUT,
+                verify=VERIFY_SSL,
+                **kwargs
+            )
         return response
     except requests.exceptions.ProxyError as e:
         # Gestione specifica per errori proxy (incluso 429)
@@ -1573,7 +1603,7 @@ def resolve_m3u8_link(url, headers=None):
         final_headers_for_resolving['Origin'] = baseurl
 
         app.logger.info(f"Passo 1: Richiesta a {stream_url}")
-        proxy_config = get_proxy_for_url(stream_url)
+        proxy_config = get_proxy_for_url(stream_url, original_url=clean_url)
         response = safe_http_request(stream_url, headers=final_headers_for_resolving, timeout=REQUEST_TIMEOUT, proxies=proxy_config)
         response.raise_for_status()
 
@@ -1592,7 +1622,7 @@ def resolve_m3u8_link(url, headers=None):
         final_headers_for_resolving['Origin'] = url2
 
         app.logger.info(f"Passo 3: Richiesta a Player 2: {url2}")
-        proxy_config = get_proxy_for_url(url2)
+        proxy_config = get_proxy_for_url(url2, original_url=clean_url)
         response = safe_http_request(url2, headers=final_headers_for_resolving, timeout=REQUEST_TIMEOUT, proxies=proxy_config)
         response.raise_for_status()
 
@@ -1605,7 +1635,7 @@ def resolve_m3u8_link(url, headers=None):
         app.logger.info(f"Passo 4: Trovato iframe: {iframe_url}")
 
         app.logger.info(f"Passo 5: Richiesta iframe: {iframe_url}")
-        proxy_config = get_proxy_for_url(iframe_url)
+        proxy_config = get_proxy_for_url(iframe_url, original_url=clean_url)
         response = safe_http_request(iframe_url, headers=final_headers_for_resolving, timeout=REQUEST_TIMEOUT, proxies=proxy_config)
         response.raise_for_status()
 
@@ -1632,7 +1662,7 @@ def resolve_m3u8_link(url, headers=None):
 
         auth_url = f'{auth_host}{auth_php}?channel_id={channel_key}&ts={auth_ts}&rnd={auth_rnd}&sig={auth_sig}'
         app.logger.info(f"Passo 6: Autenticazione: {auth_url}")
-        proxy_config = get_proxy_for_url(auth_url)
+        proxy_config = get_proxy_for_url(auth_url, original_url=clean_url)
         auth_response = safe_http_request(auth_url, headers=final_headers_for_resolving, timeout=REQUEST_TIMEOUT, proxies=proxy_config)
         auth_response.raise_for_status()
 
@@ -1641,7 +1671,7 @@ def resolve_m3u8_link(url, headers=None):
         server_lookup_url = f"https://{urlparse(iframe_url).netloc}{server_lookup}{channel_key}"
         app.logger.info(f"Passo 7: Server lookup: {server_lookup_url}")
 
-        proxy_config = get_proxy_for_url(server_lookup_url)
+        proxy_config = get_proxy_for_url(server_lookup_url, original_url=clean_url)
         lookup_response = safe_http_request(server_lookup_url, headers=final_headers_for_resolving, timeout=REQUEST_TIMEOUT, proxies=proxy_config)
         lookup_response.raise_for_status()
         server_data = lookup_response.json()
@@ -2212,10 +2242,15 @@ def proxy_prebuffer():
             if key.lower().startswith("h_")
         }
         
+        # Usa il sistema di proxy configurato
+        proxy_config = get_proxy_for_url(m3u8_url)
+        proxy_key = proxy_config['http'] if proxy_config else None
+        
         response = make_persistent_request(
             m3u8_url,
             headers=headers,
             timeout=get_dynamic_timeout(m3u8_url),
+            proxy_url=proxy_key,
             allow_redirects=True
         )
         response.raise_for_status()
@@ -2788,17 +2823,40 @@ def proxy_m3u():
         app.logger.info(f"Fetching M3U8 content from clean URL: {resolved_url}")
 
         timeout = get_dynamic_timeout(resolved_url)
-        proxy_config = get_proxy_for_url(resolved_url)
+        proxy_config = get_proxy_for_url(resolved_url, original_url=m3u_url)
         proxy_key = proxy_config['http'] if proxy_config else None
         
-        m3u_response = make_persistent_request(
-            resolved_url,
-            headers=current_headers_for_proxy,
-            timeout=timeout,
-            proxy_url=proxy_key,
-            allow_redirects=True
-        )
-        m3u_response.raise_for_status()
+        # Retry speciale per link Vavoo risolti
+        max_retries = 3 if 'vavoo.to' in m3u_url.lower() else 1
+        last_error = None
+        
+        for attempt in range(max_retries):
+            try:
+                m3u_response = make_persistent_request(
+                    resolved_url,
+                    headers=current_headers_for_proxy,
+                    timeout=timeout,
+                    proxy_url=proxy_key,
+                    allow_redirects=True
+                )
+                m3u_response.raise_for_status()
+                break  # Successo, esci dal loop
+            except requests.exceptions.HTTPError as e:
+                last_error = e
+                if e.response.status_code in [502, 503, 504] and attempt < max_retries - 1:
+                    app.logger.warning(f"Errore {e.response.status_code} per link Vavoo (tentativo {attempt + 1}/{max_retries}), riprovo...")
+                    time.sleep(2 ** attempt)  # Exponential backoff
+                    continue
+                else:
+                    raise  # Rilancia l'errore se non è recuperabile
+            except Exception as e:
+                last_error = e
+                if attempt < max_retries - 1:
+                    app.logger.warning(f"Errore per link Vavoo (tentativo {attempt + 1}/{max_retries}): {e}")
+                    time.sleep(2 ** attempt)
+                    continue
+                else:
+                    raise
 
         m3u_content = m3u_response.text
         final_url = m3u_response.url
@@ -2936,7 +2994,10 @@ def proxy_ts():
     proxy_key = proxy_config['http'] if proxy_config else None
     
     ts_timeout = get_dynamic_timeout(ts_url)
+    
+    # Retry speciale per segmenti TS di link Vavoo
     max_retries = 3
+    is_vavoo_segment = any('vavoo.to' in arg.lower() for arg in request.args.values())
     
     for attempt in range(max_retries):
         try:
@@ -2980,6 +3041,14 @@ def proxy_ts():
             else:
                 app.logger.error(f"Errore di connessione per il segmento TS: {str(e)}")
                 return f"Errore di connessione per il segmento TS: {str(e)}", 500
+        except requests.exceptions.HTTPError as e:
+            if e.response.status_code in [502, 503, 504] and is_vavoo_segment and attempt < max_retries - 1:
+                app.logger.warning(f"Errore {e.response.status_code} per segmento TS Vavoo (tentativo {attempt + 1}/{max_retries}): {ts_url}")
+                time.sleep(2 ** attempt)
+                continue
+            else:
+                app.logger.error(f"Errore HTTP per il segmento TS: {str(e)}")
+                return f"Errore HTTP per il segmento TS: {str(e)}", e.response.status_code
         except requests.exceptions.ReadTimeout as e:
             app.logger.warning(f"Read timeout esplicito per il segmento TS (tentativo {attempt + 1}/{max_retries}): {ts_url}")
             if attempt == max_retries - 1:
@@ -3363,7 +3432,14 @@ def cleanup_clients_thread():
 cleanup_clients_thread_instance = Thread(target=cleanup_clients_thread, daemon=True)
 cleanup_clients_thread_instance.start()
 
-def get_proxy_for_url(url):
+def get_proxy_for_url(url, original_url=None):
+    """
+    Ottiene un proxy per un URL, controllando anche l'URL originale per link Vavoo risolti
+    
+    Args:
+        url: URL finale da controllare
+        original_url: URL originale (usato per link Vavoo risolti)
+    """
     config = config_manager.load_config()
     no_proxy_domains = [d.strip() for d in config.get('NO_PROXY_DOMAINS', '').split(',') if d.strip()]
     
@@ -3378,11 +3454,21 @@ def get_proxy_for_url(url):
         return None
     
     try:
+        # Controlla prima l'URL finale
         parsed_url = urlparse(url)
         if any(domain in parsed_url.netloc for domain in no_proxy_domains):
+            app.logger.info(f"URL finale {url} è in NO_PROXY_DOMAINS, connessione diretta")
             return None
-    except Exception:
-        pass
+        
+        # Se c'è un URL originale e contiene vavoo.to, controlla anche quello
+        if original_url and 'vavoo.to' in original_url.lower():
+            parsed_original = urlparse(original_url)
+            if any(domain in parsed_original.netloc for domain in no_proxy_domains):
+                app.logger.info(f"URL originale Vavoo {original_url} è in NO_PROXY_DOMAINS, connessione diretta per {url}")
+                return None
+                
+    except Exception as e:
+        app.logger.warning(f"Errore nel parsing URL per NO_PROXY_DOMAINS: {e}")
     
     chosen_proxy = random.choice(available_proxies)
     return {'http': chosen_proxy, 'https': chosen_proxy}

@@ -15,7 +15,7 @@ WORKDIR /app
 
 # 4. Clona il repository (o copia il codice direttamente) nella working directory
 #    Se vuoi usare il tuo repository remoto, decommenta la riga git clone:
-RUN git clone https://github.com/mehmetey03/tvproxy .
+RUN git clone https://github.com/nzo66/tvproxy .
 COPY . .
 
 # 5. Pre-crea la directory per i log e rendila scrivibile

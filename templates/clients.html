@@ -1,0 +1,807 @@
+<!DOCTYPE html>
+<html lang="it">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Client Connessi - TV Proxy</title>
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css" rel="stylesheet">
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/socket.io/4.0.1/socket.io.js"></script>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            color: #333;
+        }
+
+        .container {
+            max-width: 1400px;
+            margin: 0 auto;
+            padding: 20px;
+        }
+
+        .header {
+            background: rgba(255, 255, 255, 0.95);
+            backdrop-filter: blur(20px);
+            border-radius: 20px;
+            padding: 2rem;
+            margin-bottom: 2rem;
+            box-shadow: 0 20px 40px rgba(0, 0, 0, 0.1);
+            text-align: center;
+        }
+
+        .header h1 {
+            color: #4a5568;
+            margin-bottom: 1rem;
+            font-size: 2.5rem;
+        }
+
+        .header p {
+            color: #718096;
+            font-size: 1.1rem;
+        }
+
+        .stats-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+            gap: 1.5rem;
+            margin-bottom: 2rem;
+        }
+
+        .stat-card {
+            background: rgba(255, 255, 255, 0.95);
+            backdrop-filter: blur(20px);
+            border-radius: 15px;
+            padding: 1.5rem;
+            box-shadow: 0 10px 30px rgba(0, 0, 0, 0.1);
+            text-align: center;
+            transition: transform 0.3s ease;
+        }
+
+        .stat-card:hover {
+            transform: translateY(-5px);
+        }
+
+        .stat-icon {
+            font-size: 2.5rem;
+            margin-bottom: 1rem;
+            color: #667eea;
+        }
+
+        .stat-value {
+            font-size: 2rem;
+            font-weight: bold;
+            color: #2d3748;
+            margin-bottom: 0.5rem;
+        }
+
+        .stat-label {
+            color: #718096;
+            font-size: 0.9rem;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+        }
+
+        .controls {
+            background: rgba(255, 255, 255, 0.95);
+            backdrop-filter: blur(20px);
+            border-radius: 15px;
+            padding: 1.5rem;
+            margin-bottom: 2rem;
+            box-shadow: 0 10px 30px rgba(0, 0, 0, 0.1);
+            display: flex;
+            gap: 1rem;
+            flex-wrap: wrap;
+            align-items: center;
+            justify-content: center;
+        }
+
+        .btn {
+            padding: 0.75rem 1.5rem;
+            border: none;
+            border-radius: 10px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.3s ease;
+            text-decoration: none;
+            display: inline-flex;
+            align-items: center;
+            gap: 0.5rem;
+        }
+
+        .btn-primary {
+            background: linear-gradient(135deg, #667eea, #764ba2);
+            color: white;
+        }
+
+        .btn-primary:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 10px 20px rgba(102, 126, 234, 0.3);
+        }
+
+        .btn-danger {
+            background: linear-gradient(135deg, #f56565, #e53e3e);
+            color: white;
+        }
+
+        .btn-danger:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 10px 20px rgba(245, 101, 101, 0.3);
+        }
+
+        .btn-success {
+            background: linear-gradient(135deg, #48bb78, #38a169);
+            color: white;
+        }
+
+        .btn-success:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 10px 20px rgba(72, 187, 120, 0.3);
+        }
+
+        .clients-table {
+            background: rgba(255, 255, 255, 0.95);
+            backdrop-filter: blur(20px);
+            border-radius: 15px;
+            overflow: hidden;
+            box-shadow: 0 20px 40px rgba(0, 0, 0, 0.1);
+        }
+
+        .table-header {
+            background: linear-gradient(135deg, #667eea, #764ba2);
+            color: white;
+            padding: 1rem;
+            font-weight: 600;
+        }
+
+        .table-container {
+            max-height: 600px;
+            overflow-y: auto;
+        }
+
+        table {
+            width: 100%;
+            border-collapse: collapse;
+        }
+
+        th, td {
+            padding: 1rem;
+            text-align: left;
+            border-bottom: 1px solid #e2e8f0;
+        }
+
+        th {
+            background: #f7fafc;
+            font-weight: 600;
+            color: #4a5568;
+            position: sticky;
+            top: 0;
+            z-index: 10;
+        }
+
+        tr:hover {
+            background: #f7fafc;
+        }
+
+        .client-id {
+            font-family: monospace;
+            background: #edf2f7;
+            padding: 0.25rem 0.5rem;
+            border-radius: 5px;
+            font-size: 0.8rem;
+        }
+
+        .status-badge {
+            padding: 0.25rem 0.75rem;
+            border-radius: 20px;
+            font-size: 0.8rem;
+            font-weight: 600;
+        }
+
+        .status-active {
+            background: #c6f6d5;
+            color: #22543d;
+        }
+
+        .status-inactive {
+            background: #fed7d7;
+            color: #742a2a;
+        }
+
+        .connection-status {
+            position: fixed;
+            bottom: 20px;
+            right: 20px;
+            background: rgba(255, 255, 255, 0.95);
+            backdrop-filter: blur(20px);
+            border-radius: 10px;
+            padding: 1rem;
+            box-shadow: 0 10px 30px rgba(0, 0, 0, 0.1);
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+            font-weight: 600;
+        }
+
+        .status-connected {
+            color: #48bb78;
+        }
+
+        .status-disconnected {
+            color: #f56565;
+        }
+
+        .loading {
+            text-align: center;
+            padding: 2rem;
+            color: #718096;
+        }
+
+        .spinner {
+            border: 3px solid #f3f3f3;
+            border-top: 3px solid #667eea;
+            border-radius: 50%;
+            width: 30px;
+            height: 30px;
+            animation: spin 1s linear infinite;
+            margin: 0 auto 1rem;
+        }
+
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
+
+        .toast {
+            position: fixed;
+            top: 20px;
+            right: 20px;
+            background: rgba(255, 255, 255, 0.95);
+            backdrop-filter: blur(20px);
+            border-radius: 10px;
+            padding: 1rem 1.5rem;
+            box-shadow: 0 10px 30px rgba(0, 0, 0, 0.1);
+            color: #2d3748;
+            font-weight: 600;
+            z-index: 1000;
+            animation: slideIn 0.3s ease;
+        }
+
+        @keyframes slideIn {
+            from { transform: translateX(100%); opacity: 0; }
+            to { transform: translateX(0); opacity: 1; }
+        }
+
+        /* Popup per statistiche M3U */
+        .popup-overlay {
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: rgba(0,0,0,0.7);
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            z-index: 2000;
+            animation: fadeIn 0.3s ease;
+        }
+
+        .popup-content {
+            background: white;
+            border-radius: 12px;
+            max-width: 800px;
+            width: 90%;
+            max-height: 80vh;
+            overflow-y: auto;
+            box-shadow: 0 10px 30px rgba(0,0,0,0.3);
+        }
+
+        .popup-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 20px;
+            border-bottom: 1px solid #eee;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            border-radius: 12px 12px 0 0;
+        }
+
+        .popup-header h3 {
+            margin: 0;
+            font-size: 1.2em;
+        }
+
+        .popup-close {
+            background: none;
+            border: none;
+            color: white;
+            font-size: 24px;
+            cursor: pointer;
+            padding: 0;
+            width: 30px;
+            height: 30px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            border-radius: 50%;
+            transition: background 0.3s;
+        }
+
+        .popup-close:hover {
+            background: rgba(255,255,255,0.2);
+        }
+
+        .popup-body {
+            padding: 20px;
+        }
+
+        .stats-summary {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 20px;
+            margin-bottom: 30px;
+        }
+
+        .stat-item {
+            background: #f8f9fa;
+            padding: 15px;
+            border-radius: 8px;
+            text-align: center;
+            border-left: 4px solid #667eea;
+        }
+
+        .stat-item strong {
+            display: block;
+            font-size: 1.5em;
+            color: #667eea;
+        }
+
+        .url-types {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 10px;
+            margin-bottom: 20px;
+        }
+
+        .url-type-item {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            background: #f8f9fa;
+            padding: 8px 12px;
+            border-radius: 20px;
+            border: 1px solid #e9ecef;
+        }
+
+        .url-type-badge {
+            background: #667eea;
+            color: white;
+            padding: 4px 8px;
+            border-radius: 12px;
+            font-size: 0.8em;
+            font-weight: bold;
+        }
+
+        .url-type-count {
+            font-weight: bold;
+            color: #495057;
+        }
+
+        .top-urls {
+            max-height: 300px;
+            overflow-y: auto;
+        }
+
+        .url-item {
+            display: flex;
+            align-items: center;
+            gap: 15px;
+            padding: 12px;
+            border-bottom: 1px solid #eee;
+            transition: background 0.3s;
+        }
+
+        .url-item:hover {
+            background: #f8f9fa;
+        }
+
+        .url-rank {
+            background: #667eea;
+            color: white;
+            width: 30px;
+            height: 30px;
+            border-radius: 50%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-weight: bold;
+            font-size: 0.9em;
+        }
+
+        .url-text {
+            flex: 1;
+            font-family: monospace;
+            font-size: 0.9em;
+            color: #495057;
+        }
+
+        .url-count {
+            background: #28a745;
+            color: white;
+            padding: 4px 8px;
+            border-radius: 12px;
+            font-weight: bold;
+            font-size: 0.8em;
+        }
+
+        @keyframes fadeIn {
+            from { opacity: 0; }
+            to { opacity: 1; }
+        }
+
+        @media (max-width: 768px) {
+            .container {
+                padding: 10px;
+            }
+            
+            .header h1 {
+                font-size: 2rem;
+            }
+            
+            .controls {
+                flex-direction: column;
+            }
+            
+            .table-container {
+                max-height: 400px;
+            }
+            
+            th, td {
+                padding: 0.5rem;
+                font-size: 0.9rem;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1><i class="fas fa-users"></i> Client Connessi</h1>
+            <p>Monitoraggio in tempo reale dei client che utilizzano il proxy</p>
+        </div>
+
+        <div class="stats-grid">
+            <div class="stat-card">
+                <i class="fas fa-users stat-icon"></i>
+                <div class="stat-value" id="totalClients">-</div>
+                <div class="stat-label">Client Totali</div>
+            </div>
+            <div class="stat-card">
+                <i class="fas fa-user-check stat-icon"></i>
+                <div class="stat-value" id="activeSessions">-</div>
+                <div class="stat-label">Sessioni Attive</div>
+            </div>
+            <div class="stat-card">
+                <i class="fas fa-chart-line stat-icon"></i>
+                <div class="stat-value" id="totalRequests">-</div>
+                <div class="stat-label">Richieste Totali</div>
+            </div>
+            <div class="stat-card">
+                <i class="fas fa-clock stat-icon"></i>
+                <div class="stat-value" id="avgConnectionTime">-</div>
+                <div class="stat-label">Tempo Medio (min)</div>
+            </div>
+            <div class="stat-card">
+                <i class="fas fa-play stat-icon"></i>
+                <div class="stat-value" id="m3uClients">-</div>
+                <div class="stat-label">Client M3U</div>
+            </div>
+            <div class="stat-card">
+                <i class="fas fa-video stat-icon"></i>
+                <div class="stat-value" id="m3uRequests">-</div>
+                <div class="stat-label">Richieste M3U</div>
+            </div>
+        </div>
+
+        <div class="controls">
+            <button class="btn btn-primary" onclick="refreshData()">
+                <i class="fas fa-sync-alt"></i> Aggiorna
+            </button>
+            <button class="btn btn-primary" onclick="showM3UStats()">
+                <i class="fas fa-play"></i> Statistiche M3U
+            </button>
+            <a href="/admin/clients/export" class="btn btn-success">
+                <i class="fas fa-download"></i> Esporta CSV
+            </a>
+            <button class="btn btn-danger" onclick="clearStats()">
+                <i class="fas fa-trash"></i> Pulisci Statistiche
+            </button>
+        </div>
+
+        <div class="clients-table">
+            <div class="table-header">
+                <i class="fas fa-list"></i> Dettagli Client
+            </div>
+            <div class="table-container">
+                <table>
+                    <thead>
+                        <tr>
+                            <th>ID Client</th>
+                            <th>IP</th>
+                            <th>User Agent</th>
+                            <th>Prima Connessione</th>
+                            <th>Ultima Attività</th>
+                            <th>Tempo Connessione</th>
+                            <th>Richieste</th>
+                            <th>Richieste M3U</th>
+                            <th>Ultimo URL M3U</th>
+                            <th>Tipi URL</th>
+                            <th>Sessione</th>
+                        </tr>
+                    </thead>
+                    <tbody id="clientsTableBody">
+                        <tr>
+                            <td colspan="9" class="loading">
+                                <div class="spinner"></div>
+                                Caricamento client...
+                            </td>
+                        </tr>
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    </div>
+
+    <div class="connection-status" id="connectionStatus">
+        <i class="fas fa-circle" id="statusIcon"></i>
+        <span id="statusText">Connessione in corso...</span>
+    </div>
+
+    <script>
+        // Inizializzazione WebSocket
+        const socket = io();
+        let isConnected = false;
+        let lastUpdateTime = Date.now();
+
+        // Elementi DOM
+        const connectionStatus = document.getElementById('connectionStatus');
+        const statusIcon = document.getElementById('statusIcon');
+        const statusText = document.getElementById('statusText');
+
+        // Gestione connessione WebSocket
+        socket.on('connect', function() {
+            isConnected = true;
+            updateConnectionStatus(true);
+            console.log('WebSocket connesso');
+        });
+
+        socket.on('disconnect', function() {
+            isConnected = false;
+            updateConnectionStatus(false);
+            console.log('WebSocket disconnesso');
+        });
+
+        socket.on('stats_update', function(data) {
+            lastUpdateTime = Date.now();
+            updateStats(data);
+        });
+
+        function updateConnectionStatus(connected) {
+            if (connected) {
+                statusIcon.className = 'fas fa-circle status-connected';
+                statusText.textContent = 'Connesso';
+                connectionStatus.style.display = 'flex';
+            } else {
+                statusIcon.className = 'fas fa-circle status-disconnected';
+                statusText.textContent = 'Disconnesso';
+                connectionStatus.style.display = 'flex';
+            }
+        }
+
+        function updateStats(data) {
+            document.getElementById('totalClients').textContent = data.active_clients || 0;
+            document.getElementById('activeSessions').textContent = data.active_sessions || 0;
+            document.getElementById('totalRequests').textContent = data.total_requests || 0;
+            
+            // Calcola tempo medio di connessione
+            const avgTime = data.avg_connection_time || 0;
+            document.getElementById('avgConnectionTime').textContent = avgTime.toFixed(1);
+            
+            // Aggiorna statistiche M3U se disponibili
+            if (data.m3u_clients !== undefined) {
+                document.getElementById('m3uClients').textContent = data.m3u_clients;
+            }
+            if (data.m3u_requests !== undefined) {
+                document.getElementById('m3uRequests').textContent = data.m3u_requests;
+            }
+        }
+
+        function refreshData() {
+            fetch('/admin/clients/stats')
+                .then(response => response.json())
+                .then(data => {
+                    updateClientsTable(data);
+                    updateStats(data);
+                })
+                .catch(error => {
+                    console.error('Errore nel caricamento dati:', error);
+                    showToast('Errore nel caricamento dati');
+                });
+        }
+
+        function updateClientsTable(data) {
+            const tbody = document.getElementById('clientsTableBody');
+            
+            if (data.clients && data.clients.length > 0) {
+                tbody.innerHTML = data.clients.map(client => `
+                    <tr>
+                        <td><span class="client-id">${client.id}</span></td>
+                        <td>${client.ip}</td>
+                        <td title="${client.user_agent}">${client.user_agent}</td>
+                        <td>${client.first_seen}</td>
+                        <td>${client.last_seen}</td>
+                        <td>${client.connection_time_minutes} min</td>
+                        <td><strong>${client.requests}</strong></td>
+                        <td><strong style="color: #667eea;">${client.m3u_requests || 0}</strong></td>
+                        <td title="${client.last_m3u_url || 'Nessuno'}">${client.last_m3u_url ? (client.last_m3u_url.length > 30 ? client.last_m3u_url.substring(0, 30) + '...' : client.last_m3u_url) : 'Nessuno'}</td>
+                        <td>${client.url_types ? client.url_types.join(', ') : 'Nessuno'}</td>
+                        <td>
+                            <span class="status-badge ${client.has_session ? 'status-active' : 'status-inactive'}">
+                                ${client.has_session ? 'Sì' : 'No'}
+                            </span>
+                        </td>
+                    </tr>
+                `).join('');
+            } else {
+                tbody.innerHTML = `
+                    <tr>
+                        <td colspan="11" class="loading">
+                            <i class="fas fa-info-circle"></i>
+                            Nessun client connesso al momento
+                        </td>
+                    </tr>
+                `;
+            }
+        }
+
+        function showM3UStats() {
+            fetch('/admin/clients/m3u-stats')
+                .then(response => {
+                    if (!response.ok) {
+                        throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+                    }
+                    return response.json();
+                })
+                .then(data => {
+                    if (data.total_m3u_clients !== undefined) {
+                        // Aggiorna le statistiche nella dashboard
+                        document.getElementById('m3uClients').textContent = data.total_m3u_clients;
+                        document.getElementById('m3uRequests').textContent = data.total_m3u_requests;
+                        
+                        // Mostra un popup con statistiche dettagliate
+                        showM3UStatsPopup(data);
+                    } else {
+                        showToast('Nessun dato disponibile per le statistiche M3U');
+                    }
+                })
+                .catch(error => {
+                    console.error('Errore nel caricamento statistiche M3U:', error);
+                    showToast('Errore nel caricamento statistiche M3U: ' + error.message);
+                });
+        }
+
+        function showM3UStatsPopup(data) {
+            const popup = document.createElement('div');
+            popup.className = 'popup-overlay';
+            
+            // Controlla se ci sono dati
+            const hasUrlTypes = data.url_type_distribution && Object.keys(data.url_type_distribution).length > 0;
+            const hasTopUrls = data.top_urls && data.top_urls.length > 0;
+            
+            popup.innerHTML = `
+                <div class="popup-content">
+                    <div class="popup-header">
+                        <h3><i class="fas fa-play"></i> Statistiche Client M3U</h3>
+                        <button onclick="this.closest('.popup-overlay').remove()" class="popup-close">&times;</button>
+                    </div>
+                    <div class="popup-body">
+                        <div class="stats-summary">
+                            <div class="stat-item">
+                                <strong>${data.total_m3u_clients}</strong> Client M3U
+                            </div>
+                            <div class="stat-item">
+                                <strong>${data.total_m3u_requests}</strong> Richieste M3U
+                            </div>
+                        </div>
+                        
+                        ${hasUrlTypes ? `
+                        <h4>Distribuzione Tipi URL:</h4>
+                        <div class="url-types">
+                            ${Object.entries(data.url_type_distribution).map(([type, count]) => 
+                                `<div class="url-type-item">
+                                    <span class="url-type-badge">${type}</span>
+                                    <span class="url-type-count">${count}</span>
+                                </div>`
+                            ).join('')}
+                        </div>
+                        ` : '<p><em>Nessun tipo di URL registrato</em></p>'}
+                        
+                        ${hasTopUrls ? `
+                        <h4>Top URL Utilizzati:</h4>
+                        <div class="top-urls">
+                            ${data.top_urls.map((item, index) => 
+                                `<div class="url-item">
+                                    <span class="url-rank">#${index + 1}</span>
+                                    <span class="url-text" title="${item.url}">${item.url.length > 50 ? item.url.substring(0, 50) + '...' : item.url}</span>
+                                    <span class="url-count">${item.count}</span>
+                                </div>`
+                            ).join('')}
+                        </div>
+                        ` : '<p><em>Nessun URL registrato</em></p>'}
+                    </div>
+                </div>
+            `;
+            
+            document.body.appendChild(popup);
+        }
+
+        function clearStats() {
+            if (confirm('Sei sicuro di voler pulire tutte le statistiche dei client?')) {
+                fetch('/admin/clients/clear', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    }
+                })
+                .then(response => response.json())
+                .then(data => {
+                    if (data.status === 'success') {
+                        showToast(data.message);
+                        refreshData();
+                    } else {
+                        showToast('Errore: ' + data.message);
+                    }
+                })
+                .catch(error => {
+                    console.error('Errore nella pulizia:', error);
+                    showToast('Errore nella pulizia delle statistiche');
+                });
+            }
+        }
+
+        function showToast(message) {
+            const toast = document.createElement('div');
+            toast.className = 'toast';
+            toast.innerHTML = `<i class="fas fa-info-circle"></i> ${message}`;
+            document.body.appendChild(toast);
+            
+            setTimeout(() => {
+                if (document.body.contains(toast)) {
+                    document.body.removeChild(toast);
+                }
+            }, 3000);
+        }
+
+        // Controllo connessione periodico
+        setInterval(() => {
+            if (Date.now() - lastUpdateTime > 10000) { // 10 secondi senza aggiornamenti
+                updateConnectionStatus(false);
+            }
+        }, 5000);
+
+        // Carica dati iniziali
+        refreshData();
+
+        // Aggiorna ogni 30 secondi
+        setInterval(refreshData, 30000);
+    </script>
+</body>
+</html> 

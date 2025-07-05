@@ -324,6 +324,14 @@
                 <h3>{{ "%.1f"|format(stats.network_recv) }}</h3>
                 <p><i class="fas fa-download"></i> MB Ricevuti</p>
             </div>
+            <div class="stat-mini">
+                <h3>{{ stats.prebuffer_info.active_streams }}</h3>
+                <p><i class="fas fa-bolt"></i> Pre-Buffer Attivi</p>
+            </div>
+            <div class="stat-mini">
+                <h3>{{ stats.prebuffer_info.buffered_segments }}</h3>
+                <p><i class="fas fa-film"></i> Segmenti Buffati</p>
+            </div>
         </div>
         
         <div class="cta-buttons">
@@ -335,6 +343,13 @@
                 <i class="fas fa-chart-line"></i>
                 API Statistiche
             </a>
+        </div>
+        
+        <div class="status-card" style="margin-top: 2rem;">
+            <h2><i class="fas fa-bolt"></i> Sistema Pre-Buffering</h2>
+            <p><strong><i class="fas fa-check-circle"></i> Funzionalità:</strong> Pre-scarica segmenti video per ridurre il buffering durante lo streaming</p>
+            <p><strong><i class="fas fa-cogs"></i> Configurazione:</strong> Gestibile tramite pannello di amministrazione</p>
+            <p><strong><i class="fas fa-chart-line"></i> Monitoraggio:</strong> Statistiche in tempo reale su stream attivi e segmenti buffati</p>
         </div>
         
         <div class="footer">

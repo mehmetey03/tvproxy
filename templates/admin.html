@@ -144,6 +144,18 @@
         .btn i {
             font-size: 1.1rem;
         }
+        
+        .btn-group {
+            display: flex;
+            gap: 0.5rem;
+            margin-top: 1rem;
+        }
+        
+        .btn-small {
+            padding: 0.5rem 1rem;
+            font-size: 0.85rem;
+            flex: 1;
+        }
 
         .stats-overview {
             background: rgba(255, 255, 255, 0.95);
@@ -222,6 +234,9 @@
             <h1><i class="fas fa-cogs"></i> Pannello di Amministrazione</h1>
             <div class="nav-links">
                 <a href="/dashboard"><i class="fas fa-chart-line"></i> Dashboard</a>
+                <a href="/admin/clients"><i class="fas fa-users"></i> Client</a>
+                <a href="/admin/config"><i class="fas fa-cog"></i> Config</a>
+                <a href="/admin/logs"><i class="fas fa-file-alt"></i> Log</a>
                 <a href="/logout"><i class="fas fa-sign-out-alt"></i> Logout</a>
             </div>
         </div>
@@ -268,6 +283,15 @@
                 <a href="/admin/config" class="btn">
                     <i class="fas fa-arrow-right"></i>
                     Configura Sistema
+                </a>
+            </div>
+            
+            <div class="admin-card">
+                <h3><i class="fas fa-users"></i> Client Connessi</h3>
+                <p>Monitora i client che utilizzano il proxy con statistiche dettagliate in tempo reale</p>
+                <a href="/admin/clients" class="btn">
+                    <i class="fas fa-arrow-right"></i>
+                    Visualizza Client
                 </a>
             </div>
             
@@ -325,13 +349,67 @@
                 </a>
             </div>
             
+
+            
             <div class="admin-card">
-                <h3><i class="fas fa-tv"></i> Test MPD</h3>
-                <p>Test e debug specifico per manifest MPEG-DASH e streaming</p>
-                <a href="/test/mpd-debug" class="btn">
-                    <i class="fas fa-arrow-right"></i>
-                    Test MPD
-                </a>
+                <h3><i class="fas fa-bolt"></i> Pre-Buffer</h3>
+                <p>Gestisci il sistema di pre-buffering per ridurre il buffering durante lo streaming</p>
+                <div class="btn-group">
+                    <button class="btn btn-small" onclick="testPreBuffer()">
+                        <i class="fas fa-play"></i>
+                        Test
+                    </button>
+                    <button class="btn btn-small" onclick="clearPreBuffer()">
+                        <i class="fas fa-trash"></i>
+                        Pulisci
+                    </button>
+                    <button class="btn btn-small" onclick="showPreBufferStatus()">
+                        <i class="fas fa-chart-line"></i>
+                        Stato
+                    </button>
+                </div>
+            </div>
+            
+            <div class="admin-card">
+                <h3><i class="fas fa-memory"></i> Gestione Memoria</h3>
+                <p>Monitora e gestisci l'uso della memoria RAM e del buffer di pre-buffering</p>
+                <div class="btn-group">
+                    <button class="btn btn-small" onclick="showMemoryStatus()">
+                        <i class="fas fa-chart-line"></i>
+                        Stato
+                    </button>
+                    <button class="btn btn-small" onclick="cleanupMemory()">
+                        <i class="fas fa-broom"></i>
+                        Pulisci
+                    </button>
+                </div>
+            </div>
+            
+            <div class="admin-card">
+                <h3><i class="fas fa-network-wired"></i> Gestione Proxy</h3>
+                <p>Monitora e gestisci i proxy con blacklist automatica per errori 429</p>
+                <div class="btn-group">
+                    <button class="btn btn-small" onclick="showProxyStatus()">
+                        <i class="fas fa-chart-line"></i>
+                        Stato
+                    </button>
+                    <button class="btn btn-small" onclick="clearProxyBlacklist()">
+                        <i class="fas fa-unlock"></i>
+                        Pulisci Blacklist
+                    </button>
+                    <button class="btn btn-small" onclick="testProxies()">
+                        <i class="fas fa-play"></i>
+                        Test
+                    </button>
+                    <button class="btn btn-small" onclick="testGitHub()">
+                        <i class="fab fa-github"></i>
+                        Test GitHub
+                    </button>
+                    <button class="btn btn-small" onclick="testIPv6Proxies()">
+                        <i class="fas fa-network-wired"></i>
+                        Test IPv6
+                    </button>
+                </div>
             </div>
         </div>
     </div>
@@ -414,6 +492,415 @@
                 }, index * 100);
             });
         });
+
+        // Funzioni per il pre-buffer
+        function testPreBuffer() {
+            const btn = event.target;
+            btn.classList.add('loading');
+            btn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Testando...';
+            
+            fetch('/admin/prebuffer/test', {
+                method: 'POST',
+                credentials: 'include',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'X-Requested-With': 'XMLHttpRequest'
+                },
+                body: JSON.stringify({
+                    test_url: 'https://dash.akamaized.net/akamai/bbb_30fps/bbb_30fps.m3u8'
+                })
+            })
+            .then(response => response.json())
+            .then(data => {
+                btn.classList.remove('loading');
+                if(data.status === 'success') {
+                    btn.innerHTML = '<i class="fas fa-check"></i> Test OK!';
+                    setTimeout(() => {
+                        btn.innerHTML = '<i class="fas fa-play"></i> Test';
+                    }, 2000);
+                    alert('Test pre-buffer completato: ' + data.results.segments_buffered + ' segmenti buffati');
+                } else {
+                    btn.innerHTML = '<i class="fas fa-play"></i> Test';
+                    alert('Errore nel test: ' + data.message);
+                }
+            })
+            .catch(error => {
+                btn.classList.remove('loading');
+                btn.innerHTML = '<i class="fas fa-play"></i> Test';
+                alert('Errore nel test pre-buffer: ' + error.message);
+            });
+        }
+
+        function clearPreBuffer() {
+            if(confirm('Sei sicuro di voler pulire tutti i buffer di pre-buffering?')) {
+                const btn = event.target;
+                btn.classList.add('loading');
+                btn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Pulendo...';
+                
+                fetch('/admin/prebuffer/clear', {
+                    method: 'POST',
+                    credentials: 'include',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'X-Requested-With': 'XMLHttpRequest'
+                    }
+                })
+                .then(response => response.json())
+                .then(data => {
+                    btn.classList.remove('loading');
+                    if(data.status === 'success') {
+                        btn.innerHTML = '<i class="fas fa-check"></i> Pulito!';
+                        setTimeout(() => {
+                            btn.innerHTML = '<i class="fas fa-trash"></i> Pulisci';
+                        }, 2000);
+                        alert('Pre-buffer pulito: ' + data.message);
+                    } else {
+                        btn.innerHTML = '<i class="fas fa-trash"></i> Pulisci';
+                        alert('Errore: ' + data.message);
+                    }
+                })
+                .catch(error => {
+                    btn.classList.remove('loading');
+                    btn.innerHTML = '<i class="fas fa-trash"></i> Pulisci';
+                    alert('Errore nella pulizia: ' + error.message);
+                });
+            }
+        }
+
+        function showPreBufferStatus() {
+            const btn = event.target;
+            btn.classList.add('loading');
+            btn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Caricando...';
+            
+            fetch('/admin/prebuffer/status', {
+                credentials: 'include',
+                headers: {
+                    'X-Requested-With': 'XMLHttpRequest'
+                }
+            })
+            .then(response => response.json())
+            .then(data => {
+                btn.classList.remove('loading');
+                btn.innerHTML = '<i class="fas fa-chart-line"></i> Stato';
+                
+                if(data.status === 'success') {
+                    const status = data;
+                    const message = `Stato Pre-Buffer:
+                    
+Stream attivi: ${status.active_streams}
+Thread attivi: ${status.active_threads}
+Segmenti buffati: ${status.total_segments_buffered}
+Dimensione buffer: ${status.total_buffer_size_mb} MB
+
+Configurazione:
+- Abilitato: ${status.pre_buffer_config.enabled ? 'Sì' : 'No'}
+- Max segmenti: ${status.pre_buffer_config.max_segments}
+- Max dimensione: ${status.pre_buffer_config.max_buffer_size / (1024*1024)} MB
+- Intervallo pulizia: ${status.pre_buffer_config.cleanup_interval}s`;
+                    
+                    alert(message);
+                } else {
+                    alert('Errore nel recupero stato: ' + data.message);
+                }
+            })
+            .catch(error => {
+                btn.classList.remove('loading');
+                btn.innerHTML = '<i class="fas fa-chart-line"></i> Stato';
+                alert('Errore nel recupero stato: ' + error.message);
+            });
+        }
+
+        function showMemoryStatus() {
+            const btn = event.target;
+            btn.classList.add('loading');
+            btn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Caricando...';
+            
+            fetch('/admin/memory/status', {
+                credentials: 'include',
+                headers: {
+                    'X-Requested-With': 'XMLHttpRequest'
+                }
+            })
+            .then(response => response.json())
+            .then(data => {
+                btn.classList.remove('loading');
+                btn.innerHTML = '<i class="fas fa-chart-line"></i> Stato';
+                
+                if(data.status === 'success') {
+                    const mem = data.system_memory;
+                    const buf = data.buffer_memory;
+                    const config = data.config;
+                    
+                    const message = `Stato Memoria Sistema:
+                    
+RAM Totale: ${mem.total_gb} GB
+RAM Usata: ${mem.used_gb} GB (${mem.percent}%)
+RAM Disponibile: ${mem.available_gb} GB
+
+Buffer Pre-Buffer:
+Dimensione: ${buf.size_mb} MB (${buf.percent}%)
+Stream attivi: ${buf.streams}
+Segmenti buffati: ${buf.segments}
+
+Configurazione:
+- Max memoria buffer: ${config.max_memory_percent}%
+- Soglia emergenza: ${config.emergency_cleanup_threshold}%
+- Max dimensione: ${config.max_buffer_size / (1024*1024)} MB`;
+                    
+                    alert(message);
+                } else {
+                    alert('Errore nel recupero stato memoria: ' + data.message);
+                }
+            })
+            .catch(error => {
+                btn.classList.remove('loading');
+                btn.innerHTML = '<i class="fas fa-chart-line"></i> Stato';
+                alert('Errore nel recupero stato memoria: ' + error.message);
+            });
+        }
+
+        function cleanupMemory() {
+            if(confirm('Sei sicuro di voler pulire la memoria e tutti i buffer?')) {
+                const btn = event.target;
+                btn.classList.add('loading');
+                btn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Pulendo...';
+                
+                fetch('/admin/memory/cleanup', {
+                    method: 'POST',
+                    credentials: 'include',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'X-Requested-With': 'XMLHttpRequest'
+                    }
+                })
+                .then(response => response.json())
+                .then(data => {
+                    btn.classList.remove('loading');
+                    if(data.status === 'success') {
+                        btn.innerHTML = '<i class="fas fa-check"></i> Pulito!';
+                        setTimeout(() => {
+                            btn.innerHTML = '<i class="fas fa-broom"></i> Pulisci';
+                        }, 2000);
+                        alert(`Memoria pulita: ${data.memory_freed_mb} MB liberati, ${data.buffer_cleared_mb} MB buffer puliti`);
+                    } else {
+                        btn.innerHTML = '<i class="fas fa-broom"></i> Pulisci';
+                        alert('Errore: ' + data.message);
+                    }
+                })
+                .catch(error => {
+                    btn.classList.remove('loading');
+                    btn.innerHTML = '<i class="fas fa-broom"></i> Pulisci';
+                    alert('Errore nella pulizia memoria: ' + error.message);
+                });
+            }
+        }
+
+        // Funzioni per il monitoraggio proxy
+        function showProxyStatus() {
+            const btn = event.target;
+            btn.classList.add('loading');
+            btn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Caricando...';
+            
+            fetch('/admin/proxy/status', {
+                credentials: 'include',
+                headers: {
+                    'X-Requested-With': 'XMLHttpRequest'
+                }
+            })
+            .then(response => response.json())
+            .then(data => {
+                btn.classList.remove('loading');
+                btn.innerHTML = '<i class="fas fa-chart-line"></i> Stato';
+                
+                if(data.status === 'success') {
+                    const status = data;
+                    let blacklistDetails = '';
+                    
+                    if(status.blacklisted_proxies > 0) {
+                        blacklistDetails = '\n\nProxy in Blacklist:\n';
+                        Object.entries(status.blacklist_info).forEach(([proxy, info]) => {
+                            blacklistDetails += `- ${proxy} (${info.ip_version}): ${info.error_count} errori ${info.error_type} (fino alle ${info.blacklisted_until})\n`;
+                        });
+                    }
+                    
+                    let ipStats = '';
+                    if(status.ip_statistics) {
+                        const total = status.ip_statistics.total;
+                        const available = status.ip_statistics.available;
+                        ipStats = `\n\nStatistiche IP:
+Totali: IPv4=${total.IPv4}, IPv6=${total.IPv6}, Hostname=${total.hostname}
+Disponibili: IPv4=${available.IPv4}, IPv6=${available.IPv6}, Hostname=${available.hostname}`;
+                    }
+                    
+                    const message = `Stato Proxy:
+                    
+Proxy totali: ${status.total_proxies}
+Proxy disponibili: ${status.available_proxies}
+Proxy in blacklist: ${status.blacklisted_proxies}${ipStats}${blacklistDetails}`;
+                    
+                    alert(message);
+                } else {
+                    alert('Errore nel recupero stato proxy: ' + data.message);
+                }
+            })
+            .catch(error => {
+                btn.classList.remove('loading');
+                btn.innerHTML = '<i class="fas fa-chart-line"></i> Stato';
+                alert('Errore nel recupero stato proxy: ' + error.message);
+            });
+        }
+
+        function clearProxyBlacklist() {
+            if(confirm('Sei sicuro di voler pulire la blacklist dei proxy?')) {
+                const btn = event.target;
+                btn.classList.add('loading');
+                btn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Pulendo...';
+                
+                fetch('/admin/proxy/clear-blacklist', {
+                    method: 'POST',
+                    credentials: 'include',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'X-Requested-With': 'XMLHttpRequest'
+                    }
+                })
+                .then(response => response.json())
+                .then(data => {
+                    btn.classList.remove('loading');
+                    if(data.status === 'success') {
+                        btn.innerHTML = '<i class="fas fa-check"></i> Pulito!';
+                        setTimeout(() => {
+                            btn.innerHTML = '<i class="fas fa-unlock"></i> Pulisci Blacklist';
+                        }, 2000);
+                        alert('Blacklist proxy pulita: ' + data.message);
+                    } else {
+                        btn.innerHTML = '<i class="fas fa-unlock"></i> Pulisci Blacklist';
+                        alert('Errore: ' + data.message);
+                    }
+                })
+                .catch(error => {
+                    btn.classList.remove('loading');
+                    btn.innerHTML = '<i class="fas fa-unlock"></i> Pulisci Blacklist';
+                    alert('Errore nella pulizia blacklist: ' + error.message);
+                });
+            }
+        }
+
+        function testProxies() {
+            const btn = event.target;
+            btn.classList.add('loading');
+            btn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Testando...';
+            
+            fetch('/admin/config/test', {
+                method: 'POST',
+                credentials: 'include',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'X-Requested-With': 'XMLHttpRequest'
+                }
+            })
+            .then(response => response.json())
+            .then(data => {
+                btn.classList.remove('loading');
+                if(data.status === 'success') {
+                    btn.innerHTML = '<i class="fas fa-check"></i> Test OK!';
+                    setTimeout(() => {
+                        btn.innerHTML = '<i class="fas fa-play"></i> Test Proxy';
+                    }, 2000);
+                    alert('Test proxy completato. Controlla i log per i dettagli.');
+                } else {
+                    btn.innerHTML = '<i class="fas fa-play"></i> Test Proxy';
+                    alert('Errore nel test: ' + data.message);
+                }
+            })
+            .catch(error => {
+                btn.classList.remove('loading');
+                btn.innerHTML = '<i class="fas fa-play"></i> Test Proxy';
+                alert('Errore nel test proxy: ' + error.message);
+            });
+        }
+
+        function testGitHub() {
+            const btn = event.target;
+            btn.classList.add('loading');
+            btn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Testando...';
+            
+            fetch('/admin/test/github', {
+                method: 'POST',
+                credentials: 'include',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'X-Requested-With': 'XMLHttpRequest'
+                }
+            })
+            .then(response => response.json())
+            .then(data => {
+                btn.classList.remove('loading');
+                if(data.status === 'success') {
+                    btn.innerHTML = '<i class="fas fa-check"></i> OK!';
+                    setTimeout(() => {
+                        btn.innerHTML = '<i class="fab fa-github"></i> Test GitHub';
+                    }, 2000);
+                    alert(`GitHub test: ${data.message}`);
+                } else {
+                    btn.innerHTML = '<i class="fab fa-github"></i> Test GitHub';
+                    alert('Errore nel test GitHub: ' + data.message);
+                }
+            })
+            .catch(error => {
+                btn.classList.remove('loading');
+                btn.innerHTML = '<i class="fab fa-github"></i> Test GitHub';
+                alert('Errore nel test GitHub: ' + error.message);
+            });
+        }
+
+        function testIPv6Proxies() {
+            const btn = event.target;
+            btn.classList.add('loading');
+            btn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Testando...';
+            
+            fetch('/admin/test/ipv6-proxies', {
+                method: 'POST',
+                credentials: 'include',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'X-Requested-With': 'XMLHttpRequest'
+                }
+            })
+            .then(response => response.json())
+            .then(data => {
+                btn.classList.remove('loading');
+                if(data.status === 'success') {
+                    btn.innerHTML = '<i class="fas fa-check"></i> OK!';
+                    setTimeout(() => {
+                        btn.innerHTML = '<i class="fas fa-network-wired"></i> Test IPv6';
+                    }, 2000);
+                    
+                    let message = `Test IPv6: ${data.message}\n\n`;
+                    if(data.results && data.results.length > 0) {
+                        data.results.forEach(result => {
+                            const statusIcon = result.status === 'success' ? '✅' : '❌';
+                            message += `${statusIcon} ${result.proxy}: ${result.message}\n`;
+                        });
+                    }
+                    alert(message);
+                } else if(data.status === 'info') {
+                    btn.innerHTML = '<i class="fas fa-info"></i> Info';
+                    setTimeout(() => {
+                        btn.innerHTML = '<i class="fas fa-network-wired"></i> Test IPv6';
+                    }, 2000);
+                    alert(data.message);
+                } else {
+                    btn.innerHTML = '<i class="fas fa-network-wired"></i> Test IPv6';
+                    alert('Errore nel test IPv6: ' + data.message);
+                }
+            })
+            .catch(error => {
+                btn.classList.remove('loading');
+                btn.innerHTML = '<i class="fas fa-network-wired"></i> Test IPv6';
+                alert('Errore nel test IPv6: ' + error.message);
+            });
+        }
     </script>
 </body>
 </html>

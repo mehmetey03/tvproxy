@@ -521,6 +521,7 @@
             <h2><i class="fas fa-check-circle"></i> Sistema Operativo</h2>
             <p><strong><i class="fas fa-link"></i> Base URL DaddyLive:</strong> <span id="daddyBaseUrl">{{ daddy_base_url }}</span></p>
             <p><strong><i class="fas fa-network-wired"></i> Proxy:</strong> <span id="proxyCount">{{ proxy_count }}</span> | <strong><i class="fas fa-users"></i> Sessioni:</strong> <span id="sessionCount">{{ session_count }}</span></p>
+            <p><strong><i class="fas fa-shield-alt"></i> Proxy Status:</strong> <span id="availableProxies">{{ proxy_count }}</span> disponibili | <span id="blacklistedProxies">0</span> in blacklist</p>
         </div>
 
         <div class="stats-grid">
@@ -565,6 +566,27 @@
                 <div class="stat-value" id="networkRecv">{{ "%.1f"|format(stats.network_recv) }}</div>
                 <div class="stat-subtitle">MB - Totale dalla partenza</div>
             </div>
+
+            <div class="stat-card">
+                <div class="stat-header">
+                    <i class="fas fa-bolt stat-icon"></i>
+                    <span class="stat-title">Pre-Buffer</span>
+                </div>
+                <div class="stat-value" id="prebufferStreams">{{ stats.prebuffer_info.active_streams }}</div>
+                <div class="stat-subtitle">
+                    <span id="prebufferSegments">{{ stats.prebuffer_info.buffered_segments }}</span> segmenti | 
+                    <span id="prebufferSize">{{ stats.prebuffer_info.buffer_size_mb }}</span> MB
+                </div>
+            </div>
+
+            <div class="stat-card">
+                <div class="stat-header">
+                    <i class="fas fa-cogs stat-icon"></i>
+                    <span class="stat-title">Thread Attivi</span>
+                </div>
+                <div class="stat-value" id="prebufferThreads">{{ stats.prebuffer_info.active_threads }}</div>
+                <div class="stat-subtitle">Pre-buffer in background</div>
+            </div>
         </div>
 
         <div class="endpoints-section">
@@ -590,18 +612,7 @@
                     <h4><i class="fas fa-key"></i> /proxy/key</h4>
                     <p>Proxy per chiavi di decrittazione AES-128</p>
                 </div>
-                <div class="endpoint-card" onclick="copyToClipboard('/proxy/mpd')">
-                    <h4><i class="fas fa-tv"></i> /proxy/mpd</h4>
-                    <p>Proxy per manifest MPEG-DASH con supporto live e VOD</p>
-                </div>
-                <div class="endpoint-card" onclick="copyToClipboard('/proxy/dash-segment')">
-                    <h4><i class="fas fa-film"></i> /proxy/dash-segment</h4>
-                    <p>Proxy per segmenti DASH con caching ottimizzato</p>
-                </div>
-                <div class="endpoint-card" onclick="copyToClipboard('/proxy/dash-master')">
-                    <h4><i class="fas fa-list"></i> /proxy/dash-master</h4>
-                    <p>Generatore master manifest DASH</p>
-                </div>
+
                 <div class="endpoint-card" onclick="copyToClipboard('/admin/debug/env')">
                     <h4><i class="fas fa-bug"></i> /admin/debug/env</h4>
                     <p>Debug variabili d'ambiente e configurazioni</p>
@@ -610,9 +621,18 @@
                     <h4><i class="fas fa-network-wired"></i> /admin/debug/proxies</h4>
                     <p>Debug proxy combinati da file e variabili d'ambiente</p>
                 </div>
-                <div class="endpoint-card" onclick="copyToClipboard('/test/mpd-debug')">
-                    <h4><i class="fas fa-vial"></i> /test/mpd-debug</h4>
-                    <p>Test e debug specifico per manifest MPD</p>
+
+                <div class="endpoint-card" onclick="copyToClipboard('/proxy/prebuffer')">
+                    <h4><i class="fas fa-bolt"></i> /proxy/prebuffer</h4>
+                    <p>Pre-buffering manuale di segmenti specifici</p>
+                </div>
+                <div class="endpoint-card" onclick="copyToClipboard('/admin/prebuffer/status')">
+                    <h4><i class="fas fa-chart-line"></i> /admin/prebuffer/status</h4>
+                    <p>Stato del sistema di pre-buffering</p>
+                </div>
+                <div class="endpoint-card" onclick="copyToClipboard('/admin/prebuffer/test')">
+                    <h4><i class="fas fa-play"></i> /admin/prebuffer/test</h4>
+                    <p>Test del sistema di pre-buffering</p>
                 </div>
             </div>
         </div>
@@ -689,9 +709,23 @@
             updateStatValue('proxyCount', stats.proxy_count);
             updateStatValue('sessionCount', stats.session_count);
             
+            // Aggiorna statistiche proxy se disponibili
+            if (stats.proxy_status) {
+                updateStatValue('availableProxies', stats.proxy_status.available_proxies);
+                updateStatValue('blacklistedProxies', stats.proxy_status.blacklisted_proxies);
+            }
+            
             // Aggiorna URL base se cambiato
             if (stats.daddy_base_url) {
                 document.getElementById('daddyBaseUrl').textContent = stats.daddy_base_url;
+            }
+            
+            // Aggiorna statistiche pre-buffer
+            if (stats.prebuffer_info) {
+                updateStatValue('prebufferStreams', stats.prebuffer_info.active_streams);
+                updateStatValue('prebufferSegments', stats.prebuffer_info.buffered_segments);
+                updateStatValue('prebufferSize', stats.prebuffer_info.buffer_size_mb);
+                updateStatValue('prebufferThreads', stats.prebuffer_info.active_threads);
             }
         }
 

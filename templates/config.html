@@ -352,7 +352,8 @@
                     <label for="socks5_proxy">Proxy SOCKS5:</label>
                     <textarea id="socks5_proxy" name="SOCKS5_PROXY" rows="3" placeholder="socks5://user:pass@proxy1:1080,socks5://user:pass@proxy2:1080">{{ config.SOCKS5_PROXY }}</textarea>
                     <i class="fas fa-shield-alt"></i>
-                    <small>Lista di proxy SOCKS5 separati da virgola</small>
+                    <small>Lista di proxy SOCKS5 separati da virgola<br>
+                    <strong>Supporto IPv6:</strong> socks5://user:pass@[2001:db8::1]:1080</small>
                 </div>
                 <div class="row">
                     <div class="col">
@@ -360,7 +361,8 @@
                             <label for="http_proxy">Proxy HTTP:</label>
                             <textarea id="http_proxy" name="HTTP_PROXY" rows="2" placeholder="http://proxy1:8080,http://proxy2:8080">{{ config.HTTP_PROXY }}</textarea>
                             <i class="fas fa-globe"></i>
-                            <small>Lista di proxy HTTP separati da virgola</small>
+                            <small>Lista di proxy HTTP separati da virgola<br>
+                            <strong>IPv6:</strong> http://[2001:db8::1]:8080</small>
                         </div>
                     </div>
                     <div class="col">
@@ -368,7 +370,8 @@
                             <label for="https_proxy">Proxy HTTPS:</label>
                             <textarea id="https_proxy" name="HTTPS_PROXY" rows="2" placeholder="https://proxy1:8080,https://proxy2:8080">{{ config.HTTPS_PROXY }}</textarea>
                             <i class="fas fa-lock"></i>
-                            <small>Lista di proxy HTTPS separati da virgola</small>
+                            <small>Lista di proxy HTTPS separati da virgola<br>
+                            <strong>IPv6:</strong> https://[2001:db8::1]:8080</small>
                         </div>
                     </div>
                 </div>
@@ -487,24 +490,61 @@
                 </div>
             </div>
             
-            <!-- Sezione Cache DASH -->
+
+            
+            <!-- Sezione Pre-Buffering -->
             <div class="config-section">
-                <h3><i class="fas fa-tv"></i> Configurazioni DASH</h3>
+                <h3><i class="fas fa-forward"></i> Configurazioni Pre-Buffering</h3>
                 <div class="row">
                     <div class="col">
                         <div class="form-group">
-                            <label for="cache_ttl_mpd">TTL Cache MPD (secondi):</label>
-                            <input type="number" id="cache_ttl_mpd" name="CACHE_TTL_MPD" value="{{ config.CACHE_TTL_MPD or 30 }}" min="5" max="300">
-                            <i class="fas fa-file-video"></i>
-                            <small>Cache per manifest MPD (default: 30s)</small>
+                            <label for="prebuffer_enabled"><b>Pre-Buffering Abilitato:</b></label>
+                            <select id="prebuffer_enabled" name="PREBUFFER_ENABLED">
+                                <option value="true" {% if config.PREBUFFER_ENABLED %}selected{% endif %}>Abilitato</option>
+                                <option value="false" {% if not config.PREBUFFER_ENABLED %}selected{% endif %}>Disabilitato</option>
+                            </select>
+                            <i class="fas fa-toggle-on"></i>
+                            <small>Pre-scarica i segmenti successivi per evitare buffering durante la riproduzione</small>
+                        </div>
+                        <div class="form-group">
+                            <label for="prebuffer_max_segments">Max Segmenti da Pre-Buffare:</label>
+                            <input type="number" id="prebuffer_max_segments" name="PREBUFFER_MAX_SEGMENTS" value="{{ config.PREBUFFER_MAX_SEGMENTS or 3 }}" min="1" max="10">
+                            <i class="fas fa-list-ol"></i>
+                            <small>Numero di segmenti da pre-scaricare in background (default: 3)</small>
                         </div>
                     </div>
                     <div class="col">
                         <div class="form-group">
-                            <label for="cache_maxsize_mpd">Max Size Cache MPD:</label>
-                            <input type="number" id="cache_maxsize_mpd" name="CACHE_MAXSIZE_MPD" value="{{ config.CACHE_MAXSIZE_MPD or 100 }}" min="10" max="500">
-                            <i class="fas fa-list"></i>
-                            <small>Numero massimo di MPD in cache</small>
+                            <label for="prebuffer_max_size_mb">Max Dimensione Buffer per Stream (MB):</label>
+                            <input type="number" id="prebuffer_max_size_mb" name="PREBUFFER_MAX_SIZE_MB" value="{{ config.PREBUFFER_MAX_SIZE_MB or 50 }}" min="10" max="200">
+                            <i class="fas fa-hdd"></i>
+                            <small>Dimensione massima del buffer in memoria per ogni stream (default: 50MB)</small>
+                        </div>
+                        <div class="form-group">
+                            <label for="prebuffer_cleanup_interval">Intervallo Pulizia Buffer (secondi):</label>
+                            <input type="number" id="prebuffer_cleanup_interval" name="PREBUFFER_CLEANUP_INTERVAL" value="{{ config.PREBUFFER_CLEANUP_INTERVAL or 300 }}" min="60" max="1800">
+                            <i class="fas fa-clock"></i>
+                            <small>Intervallo per la pulizia automatica dei buffer inattivi (default: 300s)</small>
+                        </div>
+                    </div>
+                </div>
+                
+                <!-- Nuova riga per le configurazioni di memoria -->
+                <div class="row">
+                    <div class="col">
+                        <div class="form-group">
+                            <label for="prebuffer_max_memory_percent">Max Memoria Buffer (% RAM):</label>
+                            <input type="number" id="prebuffer_max_memory_percent" name="PREBUFFER_MAX_MEMORY_PERCENT" value="{{ config.PREBUFFER_MAX_MEMORY_PERCENT or 20 }}" min="5" max="50">
+                            <i class="fas fa-memory"></i>
+                            <small>Percentuale massima di RAM utilizzabile per il buffer (default: 20%)</small>
+                        </div>
+                    </div>
+                    <div class="col">
+                        <div class="form-group">
+                            <label for="prebuffer_emergency_threshold">Soglia Emergenza (% RAM):</label>
+                            <input type="number" id="prebuffer_emergency_threshold" name="PREBUFFER_EMERGENCY_THRESHOLD" value="{{ config.PREBUFFER_EMERGENCY_THRESHOLD or 80 }}" min="70" max="95">
+                            <i class="fas fa-exclamation-triangle"></i>
+                            <small>Soglia per pulizia di emergenza quando la RAM è critica (default: 80%)</small>
                         </div>
                     </div>
                 </div>
@@ -561,6 +601,9 @@
                     </button>
                     <button type="button" class="btn btn-secondary" onclick="testConfig()">
                         <i class="fas fa-vial"></i> Test Configurazione
+                    </button>
+                    <button type="button" class="btn btn-secondary" onclick="testPreBuffer()">
+                        <i class="fas fa-forward"></i> Test Pre-Buffer
                     </button>
                     <button type="button" class="btn btn-secondary" onclick="exportConfig()">
                         <i class="fas fa-download"></i> Esporta Config
@@ -681,6 +724,40 @@
             });
         }
         
+        function testPreBuffer() {
+            const testBtn = event.target;
+            testBtn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Testando Pre-Buffer...';
+            testBtn.disabled = true;
+            
+            fetch('/admin/prebuffer/test', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'X-Requested-With': 'XMLHttpRequest'
+                },
+                body: JSON.stringify({
+                    test_url: 'https://dash.akamaized.net/akamai/bbb_30fps/bbb_30fps.m3u8'
+                })
+            })
+            .then(response => response.json())
+            .then(result => {
+                testBtn.innerHTML = '<i class="fas fa-forward"></i> Test Pre-Buffer';
+                testBtn.disabled = false;
+                
+                if (result.status === 'success') {
+                    const results = result.results;
+                    showAlert('success', `Test pre-buffer completato! Stream ID: ${results.stream_id}, Segmenti buffered: ${results.segments_buffered}, Dimensione: ${results.buffer_size_mb}MB`);
+                } else {
+                    showAlert('error', 'Test pre-buffer fallito: ' + result.message);
+                }
+            })
+            .catch(error => {
+                testBtn.innerHTML = '<i class="fas fa-forward"></i> Test Pre-Buffer';
+                testBtn.disabled = false;
+                showAlert('error', 'Errore durante il test pre-buffer: ' + error.message);
+            });
+        }
+        
         function exportConfig() {
             window.open('/admin/config/export', '_blank');
         }
@@ -693,50 +770,52 @@
             const file = event.target.files[0];
             if (!file) return;
             
-            const reader = new FileReader();
-            reader.onload = function(e) {
-                try {
-                    const config = JSON.parse(e.target.result);
-                    populateFormWithConfig(config);
-                    showAlert('success', 'Configurazione importata con successo!');
-                } catch (error) {
-                    showAlert('error', 'Errore nel parsing del file: ' + error.message);
+            // Verifica estensione file
+            if (!file.name.endsWith('.json')) {
+                showAlert('error', 'Il file deve essere in formato JSON');
+                event.target.value = '';
+                return;
+            }
+            
+            const formData = new FormData();
+            formData.append('file', file);
+            
+            // Mostra loading
+            const importBtn = document.querySelector('button[onclick="importConfig()"]');
+            const originalText = importBtn.innerHTML;
+            importBtn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Importando...';
+            importBtn.disabled = true;
+            
+            fetch('/admin/config/import', {
+                method: 'POST',
+                body: formData
+            })
+            .then(response => response.json())
+            .then(result => {
+                importBtn.innerHTML = originalText;
+                importBtn.disabled = false;
+                
+                if (result.status === 'success') {
+                    showAlert('success', result.message);
+                    // Ricarica la pagina per mostrare i nuovi valori
+                    setTimeout(() => {
+                        location.reload();
+                    }, 1500);
+                } else {
+                    showAlert('error', result.message);
                 }
-            };
-            
-            reader.onerror = function() {
-                showAlert('error', 'Errore nella lettura del file');
-            };
-            
-            reader.readAsText(file);
+            })
+            .catch(error => {
+                importBtn.innerHTML = originalText;
+                importBtn.disabled = false;
+                showAlert('error', 'Errore di connessione: ' + error.message);
+            });
             
             // Reset input file
             event.target.value = '';
         }
         
-        function populateFormWithConfig(config) {
-            // Popola tutti i campi del form con i valori importati
-            Object.keys(config).forEach(key => {
-                const element = document.querySelector(`[name="${key}"]`);
-                if (element) {
-                    if (element.type === 'checkbox') {
-                        element.checked = config[key] === 'true' || config[key] === true;
-                    } else if (element.type === 'select-one') {
-                        element.value = config[key].toString();
-                    } else {
-                        element.value = config[key];
-                    }
-                    
-                    // Aggiungi effetto visivo per i campi aggiornati
-                    element.style.backgroundColor = 'rgba(74, 222, 128, 0.1)';
-                    element.style.borderColor = '#4ade80';
-                    setTimeout(() => {
-                        element.style.backgroundColor = '';
-                        element.style.borderColor = '';
-                    }, 2000);
-                }
-            });
-        }
+
         
         // Add focus effects
         document.querySelectorAll('input, textarea, select').forEach(element => {
